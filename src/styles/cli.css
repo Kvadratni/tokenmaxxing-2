@@ -1,0 +1,158 @@
+/*
+ * Ambient fake agent session — styles for `src/ui/cli-backdrop.ts`.
+ *
+ * Owns exactly these names: .tm-cli-host, .tm-cli, .tm-cli__log, .tm-cli__line,
+ * .tm-cli__line--*, .tm-cli__path, .tm-cli__tail, @keyframes tm-cli-caret.
+ * Nothing here selects another module's class.
+ *
+ * Stacking: `.tm-cli` is `z-index: -1`, so it paints *above* the mount
+ * parent's own background and *below* every in-flow child of that parent —
+ * which is why the title copy and buttons always win. That only holds if the
+ * parent establishes a stacking context, so the host puts `.tm-cli-host` on it.
+ * `.tm-screen` already qualifies (positioned, z-index 20); the class is a
+ * no-op there and a requirement everywhere else.
+ *
+ * The parent must also be positioned (`.tm-screen` is `position: absolute`).
+ * `.tm-cli-host` deliberately does NOT set `position`: it has the same
+ * specificity as `.tm-screen` and would win the cascade and break the overlay.
+ */
+
+.tm-cli-host {
+  isolation: isolate;
+}
+
+.tm-cli {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  /* One independent session per column, tiled across the whole frame. The
+     count is set from JS (`--tm-cli-cols`) because it depends on measured
+     width, and each column has to be a real element to scroll on its own. */
+  display: grid;
+  grid-template-columns: repeat(var(--tm-cli-cols, 1), minmax(0, 1fr));
+  gap: 0 calc(7 * var(--u, 3px));
+  /* Non-negotiable: the title buttons and tree nodes sit on top of this. */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* The log never influences anything outside this box. */
+  contain: layout paint style;
+}
+
+.tm-cli__log {
+  /* A grid item, not an overlay — but still positioned, so the `::after`
+     vignette (also positioned, and later in DOM order) paints over it. */
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  /* Bottom-anchored so new lines push the old ones off the top edge. No
+     scrollTop write, no layout read — the overflow is simply clipped. */
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  padding: calc(6 * var(--u, 3px)) calc(5 * var(--u, 3px));
+  font-family: var(--font, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: var(--fs-xs, 10px);
+  line-height: 1.45;
+  color: var(--fg2, #6b7482);
+  white-space: pre;
+  /* Legibility budget: this thing lives *behind* real copy. */
+  opacity: var(--tm-cli-opacity, 0.15);
+  /* Soften the top clip so lines do not pop in against a hard edge. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16%, #000 100%);
+}
+
+/*
+ * Vignette. Sits above the log at full strength and paints the page background
+ * back over the middle of the frame, so the area behind the logo, the pitch and
+ * the buttons is close to empty and only the edges keep any texture.
+ *
+ * The rgba() stops are `--bg0` with alpha; they must track palette.css by hand
+ * (same convention palette.css already uses against src/render/palette.ts).
+ */
+.tm-cli::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 62% 48% at 50% 44%,
+    var(--bg0, #14161a) 0%,
+    rgba(20, 22, 26, 0.94) 30%,
+    rgba(20, 22, 26, 0.6) 56%,
+    rgba(20, 22, 26, 0) 82%
+  );
+}
+
+.tm-cli__line {
+  /* Empty spacer lines still take a row. */
+  min-height: 1.45em;
+  overflow: hidden;
+}
+
+.tm-cli__line--prompt {
+  color: var(--green, #4ec94e);
+}
+
+.tm-cli__line--tool {
+  color: var(--fg1, #9aa4b2);
+}
+
+.tm-cli__line--code,
+.tm-cli__line--note,
+.tm-cli__line--gap {
+  color: var(--fg2, #6b7482);
+}
+
+.tm-cli__line--ok {
+  color: var(--green, #4ec94e);
+}
+
+.tm-cli__line--warn {
+  color: var(--amber, #e8b34a);
+}
+
+.tm-cli__line--fail {
+  color: var(--red, #e5484d);
+}
+
+.tm-cli__path {
+  color: var(--blue, #4a9de8);
+}
+
+.tm-cli__tail {
+  color: var(--fg2, #6b7482);
+}
+
+/* Blinking block caret, trailing whatever line landed last. Pure CSS — the
+   animation loop never touches it. */
+.tm-cli__log > .tm-cli__line:last-child::after {
+  content: "\258b";
+  color: var(--green, #4ec94e);
+  animation: tm-cli-caret 1.06s steps(1, end) infinite;
+}
+
+@keyframes tm-cli-caret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* `is-static` is set by the module for the reduced-motion frame; the media
+   query covers the case where cli.css is used without the game shell. */
+.tm-cli.is-static .tm-cli__log > .tm-cli__line:last-child::after {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-cli__log > .tm-cli__line:last-child::after {
+    animation: none;
+  }
+}

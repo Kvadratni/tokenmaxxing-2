@@ -1,0 +1,7 @@
+Use case: precise-object-edit
+Asset type: landscape pixel-art game concept
+Primary request: Correct only the huge presentation-screen headline in the supplied image. Remove the stray leading dot before 2.5. The screen must read exactly "TOKENMAXXING 2.5 (NEW) (FINAL)" and nothing else. A two-line layout is allowed only between "TOKENMAXXING" and "2.5", but there must be no extra punctuation, bullet, dot, glyph, word, or character anywhere on the screen.
+Text (verbatim): "TOKENMAXXING 2.5 (NEW) (FINAL)".
+Typography: Preserve the same crisp blocky uppercase monospace pixel font, letter spacing, terminal-green color, and ordered-dither glow. Render the quoted text verbatim with the period only between 2 and 5 and with both parenthesized words exactly as written.
+Invariants: Keep the entire supplied image unchanged outside the presentation-screen lettering: same exact 1536x1024 landscape canvas, strict chunky pixel-art rendering, stage, lighting, confetti, audience, phone screens, graveyard, three tombstones and their existing labels, DEPRECATED sign, spotlight, composition, palette, and THE AGENT. Preserve THE AGENT exactly as shown: narrow terminal-green cursor block about twice as tall as wide, two square white eyes, thin stick arms and short stick legs, and dithered green glow.
+Avoid: changing, adding, moving, or removing any object outside the headline; any additional text or symbols; any extra dot before 2.5; smooth gradients; anti-aliasing; painterly, vector, 3D, or photorealistic rendering.

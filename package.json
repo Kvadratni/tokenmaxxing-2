@@ -1,0 +1,32 @@
+{
+  "name": "tokenmaxxing-2",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tokenmaxxing \u2014 a roguelike idle clicker about shipping slop before the deadline.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4185 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:all": "npm run typecheck && npm run test && npm run build && npm run test:e2e",
+    "art": "node tools/art/build-art.mjs",
+    "balance": "vitest run tests/unit/balance.report.test.ts --reporter=basic",
+    "gauntlet": "node tools/gauntlet/run-gauntlet.mjs",
+    "verify:atlas": "node tools/art/verify-atlas.mjs",
+    "build:single": "vite build --config vite.single.config.ts && node scripts/inline.mjs",
+    "balance:demoday": "vite-node scripts/demoday.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^2.1.8",
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,2093 @@
+/*
+ * Tokenmaxxing DOM chrome.
+ *
+ * Two scale units, both written on `.tm-ui`:
+ *   --px  the canvas scale. Widths that must line up with the 320x180 stage
+ *         use this so the whole layout steps in integers together.
+ *   --u   the chrome unit, `max(2px, var(--px))`. Identical to --px at every
+ *         scale >= 2; it only kicks in at 1x (a 375px phone) where a literal
+ *         1px padding would clip 8px text out of existence.
+ */
+
+.tm-ui,
+.tm-ui *,
+.tm-ui *::before,
+.tm-ui *::after {
+  box-sizing: border-box;
+}
+
+.tm-ui [hidden] {
+  display: none !important;
+}
+
+/*
+ * `.tm-ui` is a flex *column*, so the horizontal axis is the cross axis and its
+ * items keep their `min-width: auto` — a child wider than the shell (the topbar
+ * with its hotkey legend, at 390px on a 390px phone) pushes `scrollWidth` past
+ * the viewport and the whole page scrolls sideways. Nothing in the chrome is
+ * allowed to be wider than the shell that contains it.
+ */
+.tm-ui > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tm-ui {
+  --font: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --u: max(2px, var(--px));
+  --gap: calc(2 * var(--u));
+  --gap2: calc(4 * var(--u));
+  --rail: calc(104 * var(--px));
+
+  /* type scale, floored so a 1x or 2x viewport stays legible */
+  --fs: max(10px, calc(4 * var(--px)));
+  --fs-sm: max(9px, calc(3.2 * var(--px)));
+  --fs-xs: max(8px, calc(2.8 * var(--px)));
+  --fs-lg: max(13px, calc(6 * var(--px)));
+  --fs-xl: max(20px, calc(11 * var(--px)));
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--gap);
+  width: 100%;
+  min-height: 100%;
+  padding: var(--gap2);
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.35;
+  color: var(--fg0);
+  background: var(--bg0);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tm-ui button {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tm-ui :focus-visible {
+  outline: max(2px, calc(1 * var(--px))) solid var(--blue);
+  outline-offset: calc(1 * var(--u));
+}
+
+/* --------------------------------------------------------------------- */
+/* shell layout                                                          */
+/* --------------------------------------------------------------------- */
+
+.tm-topbar {
+  position: relative;
+  z-index: 30; /* stays reachable above the title / meta overlays */
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  width: 100%;
+  max-width: calc(404 * var(--px));
+  min-height: calc(9 * var(--u));
+  /* The legend is decorative; clip it rather than let it widen the page. */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tm-brand {
+  font-size: var(--fs-sm);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--green);
+  white-space: nowrap;
+}
+
+.tm-topbar__spacer {
+  flex: 1 1 auto;
+}
+
+.tm-main {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--gap2);
+  width: 100%;
+  max-width: calc(404 * var(--px));
+  /* Centres the board in the leftover height, but collapses to 0 when the
+     content is taller than the viewport — unlike justify-content: center,
+     which would push the top out of reach. */
+  margin-block: auto;
+}
+
+.tm-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  flex: 0 0 auto;
+  width: calc(320 * var(--px));
+  min-width: 0;
+}
+
+/* stacked layout for narrow viewports */
+.tm-ui[data-layout="stacked"] .tm-main {
+  flex-direction: column;
+  align-items: center;
+}
+
+/* --------------------------------------------------------------------- */
+/* the shop: in the flow, or a bottom sheet                              */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Which one you get is decided by *height*, not width — see `DRAWER_MAX_VH` in
+ * src/ui/scale.ts, which writes `data-shop-drawer` on the shell.
+ *
+ * With height to spare (every portrait phone, tablet and desktop) the shop stays
+ * in the flow: below the stage when stacked, beside it as a rail when wide. A
+ * portrait phone is width-bound, so that costs it no scale at all.
+ *
+ * On a short viewport it cannot: the rail is 104 units of a scale-1-ish pixel
+ * while the type has a 10px floor, so every row wrapped mid-word, and stacking
+ * it instead spends 420 units of height a landscape phone has not got. There it
+ * becomes a bottom sheet.
+ */
+
+/* The in-flow stacked shop. Centred explicitly: `.tm-main` is a column flex
+   container with `align-items: center`, and `.tm-col` above obeys it, but the
+   shop was landing flush against the container's left edge — 3px out of line
+   with the stage directly above it, at every portrait width. Setting it here
+   does not depend on working out which other rule was winning. */
+.tm-ui[data-layout="stacked"]:not([data-shop-drawer]) .tm-shop {
+  width: calc(320 * var(--px));
+  max-width: 100%;
+  max-height: none;
+  align-self: center;
+  margin-inline: auto;
+}
+
+/* Both of these exist only in drawer mode. `hidden` is written from
+   src/ui/index.ts as well, because a `display: none` button that is still in the
+   tab ring is how the desktop tab order broke; this is the paint half. */
+.tm-shop-toggle,
+.tm-scrim {
+  display: none;
+}
+
+.tm-ui[data-shop-drawer] .tm-shop-toggle {
+  display: inline-flex;
+}
+
+.tm-ui[data-shop-drawer] .tm-scrim {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: rgba(20, 22, 26, 0.72);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms linear;
+}
+
+.tm-ui[data-shop-drawer][data-shop-open] .tm-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tm-ui[data-shop-drawer] .tm-shop {
+  /* Out of the flow, so the board gets the whole screen and the scale can grow
+     to the 268-unit column budget instead of the 420-unit one. */
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  width: 100%;
+  max-width: none;
+  max-height: 72vh;
+  overflow-y: auto;
+  border-top: calc(1 * var(--px)) solid var(--green);
+  transform: translateY(100%);
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tm-ui[data-shop-drawer][data-shop-open] .tm-shop {
+  transform: translateY(0);
+}
+
+.tm-ui[data-reduced-motion="1"] .tm-shop,
+.tm-ui[data-reduced-motion="1"] .tm-scrim {
+  transition: none;
+}
+
+.tm-ui[data-layout="stacked"] .tm-legend {
+  display: none;
+}
+
+/* --------------------------------------------------------------------- */
+/* stage + canvas                                                        */
+/* --------------------------------------------------------------------- */
+
+.tm-stage {
+  position: relative;
+  /* Outline, not border: a border would eat into the box and the canvas
+     would render at a non-integer multiple of 320x180. */
+  outline: calc(1 * var(--px)) solid var(--line);
+  outline-offset: 0;
+  width: calc(320 * var(--px));
+  height: calc(180 * var(--px));
+  background: var(--bg0);
+  overflow: hidden;
+}
+
+.tm-scene {
+  display: block;
+  width: calc(320 * var(--px));
+  height: calc(180 * var(--px));
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: var(--bg0);
+}
+
+/* Full-canvas input surface. The UI forwards pointer + keyboard activation
+   through `onAction`; the integrator maps it to scene coords. */
+.tm-laptop-hit {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: crosshair;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tm-laptop-hit:focus-visible {
+  outline-offset: calc(-2 * var(--u));
+}
+
+/* --------------------------------------------------------------------- */
+/* HUD                                                                   */
+/* --------------------------------------------------------------------- */
+
+.tm-hud {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--gap);
+  width: 100%;
+  padding: var(--gap);
+  border: calc(1 * var(--px)) solid var(--line);
+  background: var(--bg1);
+}
+
+.tm-hud__wallet {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: calc(60 * var(--px));
+}
+
+.tm-hud__slop {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  color: var(--green);
+  text-shadow: 0 0 calc(3 * var(--u)) rgba(78, 201, 78, 0.35);
+}
+
+.tm-hud__slop-label {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+
+.tm-hud__sub {
+  display: flex;
+  gap: var(--gap);
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+  white-space: nowrap;
+}
+
+.tm-hud__rate {
+  color: var(--green);
+}
+
+.tm-hud__bars {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(1 * var(--u));
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tm-hud__line {
+  display: flex;
+  flex-wrap: wrap; /* the requirement drops to its own row before it clips */
+  align-items: baseline;
+  gap: 0 var(--gap);
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+  white-space: nowrap;
+}
+
+.tm-hud__projnum {
+  color: var(--fg2);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.tm-hud__projname {
+  color: var(--fg0);
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.tm-hud__line-spacer {
+  flex: 1 1 auto;
+}
+
+.tm-hud__eta {
+  color: var(--fg2);
+  min-width: 7ch;
+  text-align: right;
+}
+
+.tm-hud__right {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: calc(1 * var(--u));
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.tm-hud__demos {
+  font-size: var(--fs-sm);
+  text-align: center;
+  color: var(--amber);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tm-hud__demos small {
+  display: block;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  color: var(--fg2);
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------------- */
+/* bars                                                                  */
+/* --------------------------------------------------------------------- */
+
+.tm-bar {
+  position: relative;
+  width: 100%;
+  height: calc(7 * var(--u));
+  background: var(--bg0);
+  border: calc(1 * var(--px)) solid var(--line);
+  overflow: hidden;
+}
+
+.tm-bar__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: var(--green2);
+  transition: width 90ms linear, background-color 200ms linear;
+}
+
+.tm-bar__ghost {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  display: none;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(229, 72, 77, 0.9) 0,
+    rgba(229, 72, 77, 0.9) calc(1 * var(--u)),
+    rgba(229, 72, 77, 0.25) calc(1 * var(--u)),
+    rgba(229, 72, 77, 0.25) calc(2 * var(--u))
+  );
+}
+
+.tm-bar.is-preview .tm-bar__ghost {
+  display: block;
+}
+
+/* ship bar */
+.tm-bar--ship {
+  height: calc(9 * var(--u));
+}
+
+.tm-bar--ship .tm-bar__fill {
+  background: linear-gradient(180deg, var(--green) 0%, var(--green2) 100%);
+}
+
+.tm-bar--ship.is-ready {
+  border-color: var(--green);
+}
+
+.tm-bar--ship.is-ready .tm-bar__fill {
+  animation: tm-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes tm-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.5);
+  }
+}
+
+/* deadline bar, styled as a CI pipeline strip */
+.tm-bar--deadline {
+  height: calc(8 * var(--u));
+}
+
+.tm-bar--deadline .tm-bar__fill {
+  background: var(--green2);
+  transition: width 90ms linear;
+}
+
+.tm-bar--deadline.is-warn .tm-bar__fill {
+  background: var(--amber);
+}
+
+.tm-bar--deadline.is-crit .tm-bar__fill {
+  background: var(--red);
+}
+
+.tm-bar--deadline.is-flash {
+  border-color: var(--red);
+  animation: tm-flash 520ms steps(2, end) infinite;
+}
+
+@keyframes tm-flash {
+  50% {
+    background: rgba(229, 72, 77, 0.28);
+  }
+}
+
+/* segmented CI ticks laid over the fill */
+.tm-bar__segs {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent calc(7 * var(--u)),
+    var(--bg1) calc(7 * var(--u)),
+    var(--bg1) calc(8 * var(--u))
+  );
+  opacity: 0.8;
+}
+
+.tm-bar__time {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: calc(1 * var(--u));
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.06em;
+  color: var(--white);
+  text-shadow: 0 0 calc(1 * var(--u)) rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------- */
+/* ship button                                                           */
+/* --------------------------------------------------------------------- */
+
+.tm-ship {
+  padding: calc(2 * var(--u)) calc(5 * var(--u));
+  min-width: calc(36 * var(--px));
+  font-size: var(--fs);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--fg2);
+  background: var(--bg2);
+  border: calc(1 * var(--px)) solid var(--line);
+  transition: transform 80ms ease-out;
+}
+
+.tm-ship:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tm-ship:not(:disabled) {
+  color: var(--bg0);
+  background: var(--green);
+  border-color: var(--white);
+  animation: tm-ship-ready 1100ms ease-in-out infinite;
+}
+
+.tm-ship:not(:disabled):hover {
+  background: var(--white);
+}
+
+.tm-ship:not(:disabled):active {
+  transform: translateY(calc(1 * var(--u)));
+}
+
+@keyframes tm-ship-ready {
+  0%,
+  100% {
+    box-shadow: 0 0 calc(2 * var(--u)) rgba(78, 201, 78, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 calc(7 * var(--u)) rgba(78, 201, 78, 0.85);
+  }
+}
+
+/* --------------------------------------------------------------------- */
+/* incidents                                                             */
+/* --------------------------------------------------------------------- */
+
+.tm-incidents {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(1 * var(--u));
+  padding: calc(2 * var(--u));
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tm-incident {
+  display: flex;
+  align-items: baseline;
+  gap: calc(2 * var(--u));
+  padding: 0 calc(2 * var(--u));
+  font-size: var(--fs-sm);
+  background: rgba(20, 22, 26, 0.92);
+  border-left: calc(2 * var(--u)) solid var(--red);
+  color: var(--fg0);
+}
+
+.tm-incident--good {
+  border-left-color: var(--green);
+}
+
+.tm-incident__name {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--red);
+  white-space: nowrap;
+}
+
+.tm-incident--good .tm-incident__name {
+  color: var(--green);
+}
+
+.tm-incident__flavor {
+  flex: 1 1 auto;
+  color: var(--fg1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-incident__clicks {
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.tm-incident__timer {
+  min-width: 5ch;
+  text-align: right;
+  color: var(--fg1);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------- */
+/* active card chips                                                     */
+/* --------------------------------------------------------------------- */
+
+.tm-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(1 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: calc(7 * var(--u));
+}
+
+.tm-chip {
+  position: relative;
+  padding: 0 calc(2 * var(--u));
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+  background: var(--bg2);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+/* Permanent tree buffs, visually distinct from the run's cards: they did not
+   come from a draft and they will still be here next run. */
+.tm-chip--meta {
+  border-style: dashed;
+  color: var(--amber);
+}
+
+.tm-chip--uncommon {
+  border-color: var(--blue);
+  color: var(--fg0);
+}
+
+.tm-chip--rare {
+  border-color: var(--purple);
+  color: var(--white);
+}
+
+.tm-chip__tip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 1 * var(--u));
+  z-index: 5;
+  display: none;
+  width: max-content;
+  max-width: calc(120 * var(--px));
+  padding: calc(1 * var(--u)) calc(2 * var(--u));
+  color: var(--fg0);
+  background: var(--bg3);
+  border: calc(1 * var(--px)) solid var(--line);
+  white-space: normal;
+  text-align: left;
+}
+
+.tm-chip:hover .tm-chip__tip,
+.tm-chip:focus .tm-chip__tip,
+.tm-chip:focus-visible .tm-chip__tip {
+  display: block;
+}
+
+/* --------------------------------------------------------------------- */
+/* shop rail                                                             */
+/* --------------------------------------------------------------------- */
+
+.tm-shop {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  flex: 1 1 auto;
+  width: var(--rail);
+  min-width: calc(58 * var(--px));
+  max-width: calc(100 * var(--px));
+  max-height: calc(232 * var(--px));
+  border: calc(1 * var(--px)) solid var(--line);
+  background: var(--bg1);
+  overflow: hidden;
+}
+
+.tm-shop__tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: calc(1 * var(--px)) solid var(--line);
+  background: var(--bg2);
+}
+
+.tm-tab {
+  flex: 1 1 auto;
+  padding: calc(2 * var(--u)) calc(1 * var(--u));
+  font-size: var(--fs-sm);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg2);
+  background: transparent;
+  border: 0;
+  border-bottom: calc(2 * var(--u)) solid transparent;
+}
+
+.tm-tab[aria-selected="true"] {
+  color: var(--green);
+  background: var(--bg1);
+  border-bottom-color: var(--green);
+}
+
+.tm-qty {
+  flex: 0 0 auto;
+  min-width: 5ch;
+  padding: 0 calc(2 * var(--u));
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--amber);
+  background: var(--bg3);
+  border: 0;
+  border-left: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-shop__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg3) var(--bg1);
+}
+
+.tm-list,
+.tm-list__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.tm-list__empty {
+  padding: calc(3 * var(--u));
+  font-size: var(--fs-sm);
+  color: var(--fg2);
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------- */
+/* shop rows                                                             */
+/* --------------------------------------------------------------------- */
+
+.tm-row {
+  display: flex;
+  align-items: stretch;
+  gap: calc(2 * var(--u));
+  width: 100%;
+  padding: calc(2 * var(--u));
+  text-align: left;
+  color: var(--fg0);
+  background: var(--bg1);
+  border: 0;
+  border-bottom: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-row:not(:disabled):hover {
+  background: var(--bg2);
+}
+
+.tm-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.tm-row__key {
+  flex: 0 0 auto;
+  align-self: center;
+  min-width: calc(6 * var(--u));
+  height: calc(6 * var(--u));
+  font-size: var(--fs-xs);
+  line-height: calc(6 * var(--u));
+  text-align: center;
+  color: var(--fg2);
+  background: var(--bg0);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-row__key:empty {
+  visibility: hidden;
+}
+
+/* --------------------------------------------------------------------- */
+/* icons                                                                  */
+/* --------------------------------------------------------------------- */
+
+/*
+ * One 128x128 sheet of 16x16 cells (tools/art/icons.mjs). `--ix`/`--iy` are the
+ * grid coordinates, written per element by src/ui/icon.ts. Displayed at a whole
+ * multiple of 16 so the art never lands between pixels.
+ */
+.tm-icon {
+  --isz: 32px;
+  /* A <span> is inline by default, which ignores width/height and collapses
+     the tile to a 0x0 box. It must be a block. */
+  display: block;
+  flex: 0 0 auto;
+  width: var(--isz);
+  height: var(--isz);
+  background-image: var(--icon-sheet);
+  background-repeat: no-repeat;
+  background-size: calc(var(--isz) * var(--icon-cols, 8)) calc(var(--isz) * var(--icon-rows, 8));
+  background-position: calc(var(--ix, 0) * var(--isz) * -1) calc(var(--iy, 0) * var(--isz) * -1);
+  image-rendering: pixelated;
+}
+
+/* An id with no art still occupies its slot rather than collapsing the row. */
+.tm-icon--missing {
+  background-image: none;
+  background-color: var(--bg0);
+  border: 1px solid var(--line);
+}
+
+/* Icon tile with the hotkey digit tucked into its corner. */
+.tm-row__glyph {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  line-height: 0;
+}
+
+.tm-row__glyph .tm-row__key {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  min-width: calc(4 * var(--u));
+  height: calc(4 * var(--u));
+  line-height: calc(4 * var(--u));
+  font-size: var(--fs-xs);
+  background: var(--bg0);
+  border: 1px solid var(--line);
+  color: var(--fg1);
+}
+
+.tm-row:disabled .tm-icon {
+  filter: grayscale(0.7) brightness(0.65);
+}
+
+/* Cards carry a bigger icon beside the rarity flag. */
+.tm-card__icon {
+  --isz: 32px;
+}
+
+.tm-card__head {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+}
+
+@media (max-width: 899px) {
+  .tm-icon {
+    --isz: 16px;
+  }
+}
+
+.tm-row__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tm-row__name {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--fg0);
+  /* "Multi-Harness Orchestrator" does not fit on one line and abbreviating it
+     to "Multi-Harness Orche…" helps nobody. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.tm-row__blurb {
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+  /* These are the jokes. Truncating them to one ellipsised line threw away
+     half the writing, so they wrap instead. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.tm-row__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 calc(2 * var(--u));
+  font-size: var(--fs-xs);
+  color: var(--fg1);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tm-row__rate {
+  color: var(--green);
+}
+
+.tm-row__side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 8ch;
+}
+
+.tm-row__cost {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.tm-row:disabled .tm-row__cost {
+  color: var(--red);
+}
+
+/* "how much ship bar does this eat" hint — the central decision of the game */
+.tm-row__barcost {
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+.tm-row.is-heavy .tm-row__barcost {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.tm-row--risk {
+  background: repeating-linear-gradient(
+      135deg,
+      transparent 0,
+      transparent calc(3 * var(--u)),
+      rgba(229, 72, 77, 0.08) calc(3 * var(--u)),
+      rgba(229, 72, 77, 0.08) calc(6 * var(--u))
+    ),
+    var(--bg1);
+  border-left: calc(2 * var(--u)) solid var(--red);
+}
+
+.tm-row--risk .tm-row__name,
+.tm-row--risk .tm-row__stats {
+  color: var(--red);
+}
+
+.tm-row--risk .tm-row__name::before {
+  content: "⚠ ";
+}
+
+/* the same dial, turned the safe way */
+.tm-row--risk-safe {
+  background: repeating-linear-gradient(
+      135deg,
+      transparent 0,
+      transparent calc(3 * var(--u)),
+      rgba(232, 179, 74, 0.08) calc(3 * var(--u)),
+      rgba(232, 179, 74, 0.08) calc(6 * var(--u))
+    ),
+    var(--bg1);
+  border-left-color: var(--amber);
+}
+
+.tm-row--risk-safe .tm-row__name,
+.tm-row--risk-safe .tm-row__stats {
+  color: var(--amber);
+}
+
+.tm-row--risk-safe .tm-row__name::before {
+  content: "◆ ";
+}
+
+/* --------------------------------------------------------------------- */
+/* modals                                                                */
+/* --------------------------------------------------------------------- */
+
+.tm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--gap2);
+  background: rgba(20, 22, 26, 0.86);
+}
+
+.tm-modal__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  width: min(100%, calc(300 * var(--px)));
+  max-height: 100%;
+  overflow-y: auto;
+  padding: calc(5 * var(--u));
+  background: var(--bg1);
+  border: calc(1 * var(--px)) solid var(--line);
+  box-shadow: 0 0 0 calc(1 * var(--u)) var(--bg0),
+    0 calc(4 * var(--u)) calc(12 * var(--u)) rgba(0, 0, 0, 0.6);
+}
+
+.tm-modal__title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--white);
+}
+
+.tm-modal__sub {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+}
+
+/* --------------------------------------------------------------------- */
+/* draft                                                                 */
+/* --------------------------------------------------------------------- */
+
+.tm-draft__hint {
+  margin: calc(2 * var(--u)) 0 0;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg2);
+}
+
+.tm-draft__cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  justify-content: center;
+  padding-top: calc(3 * var(--u)); /* room for the hover lift */
+}
+
+.tm-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(1 * var(--u));
+  flex: 1 1 calc(62 * var(--px));
+  min-width: calc(56 * var(--px));
+  max-width: calc(88 * var(--px));
+  min-height: calc(46 * var(--px));
+  padding: calc(3 * var(--u));
+  text-align: left;
+  background: linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 100%);
+  border: calc(1 * var(--px)) solid var(--fg2);
+  transition: transform 110ms ease-out, box-shadow 110ms ease-out;
+}
+
+/* Highlighted but NOT yet taken. Committing needs the Confirm button. */
+.tm-card.is-selected {
+  border-color: var(--green);
+  box-shadow: 0 0 0 calc(1 * var(--px)) var(--green), 0 calc(2 * var(--u)) calc(5 * var(--u)) rgba(0, 0, 0, 0.5);
+  transform: translateY(calc(-1 * var(--u)));
+}
+
+.tm-card.is-selected .tm-card__name {
+  color: var(--green);
+}
+
+.tm-btn--primary:not(:disabled) {
+  color: var(--bg0);
+  background: var(--green);
+  border-color: var(--white);
+  font-weight: 700;
+}
+
+/* A tier you cannot buy yet — shown so the ladder reads ten deep from run 1. */
+.tm-row--locked {
+  opacity: 0.45;
+  cursor: default;
+  border-style: dashed;
+}
+
+.tm-row--locked .tm-row__cost {
+  color: var(--fg2);
+}
+
+.tm-hud__risk {
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+/* The risk dial only earns colour once the player has actually raised it. */
+.tm-hud__risk.is-hot {
+  color: var(--red);
+}
+
+/* The line that tells a first-timer the upgrade tree exists at all. Ruled off
+   as a callout so it does not read as more of the run's statistics. */
+.tm-over__carry {
+  margin: calc(3 * var(--u)) 0 0;
+  padding: calc(2 * var(--u)) 0 calc(2 * var(--u)) calc(3 * var(--u));
+  border-left: var(--u) solid var(--green);
+  background: rgba(78, 201, 78, 0.06);
+  color: var(--fg0);
+  line-height: 1.5;
+}
+
+/* Only rendered once a crit dial is above its base, so it can afford colour. */
+.tm-hud__crit {
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.tm-ship.is-blocked:disabled {
+  color: var(--red);
+  border-color: var(--red);
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 calc(3 * var(--u)),
+    rgba(var(--red-rgb, 229, 72, 77), 0.14) calc(3 * var(--u)) calc(6 * var(--u))
+  );
+  opacity: 1;
+}
+
+/* A tier at its ceiling: still legible, obviously spent. */
+.tm-row--capped .tm-row__cost {
+  color: var(--fg2);
+  text-decoration: line-through;
+}
+
+.tm-row--capped .tm-row__owned {
+  color: var(--amber);
+}
+
+.tm-row__lock {
+  /* Own line: the unlock hint is a sentence, not a stat chip. */
+  flex: 1 0 100%;
+  font-size: var(--fs-xs);
+  color: var(--amber);
+  letter-spacing: 0.05em;
+}
+
+.tm-card:hover,
+.tm-card:focus-visible {
+  transform: translateY(calc(-2 * var(--u)));
+  box-shadow: 0 calc(3 * var(--u)) calc(6 * var(--u)) rgba(0, 0, 0, 0.55);
+}
+
+.tm-card--common {
+  border-color: var(--rarity-common);
+}
+
+.tm-card--uncommon {
+  border-color: var(--rarity-uncommon);
+  box-shadow: inset 0 0 calc(6 * var(--u)) rgba(74, 157, 232, 0.16);
+}
+
+.tm-card--rare {
+  border-color: var(--rarity-rare);
+  box-shadow: inset 0 0 calc(6 * var(--u)) rgba(155, 107, 214, 0.22);
+}
+
+.tm-card__rarity {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--rarity-common);
+}
+
+.tm-card--uncommon .tm-card__rarity {
+  color: var(--rarity-uncommon);
+}
+
+.tm-card--rare .tm-card__rarity {
+  color: var(--rarity-rare);
+}
+
+.tm-card__name {
+  font-size: var(--fs);
+  font-weight: 700;
+  color: var(--white);
+}
+
+.tm-card__blurb {
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+}
+
+/* --------------------------------------------------------------------- */
+/* generic buttons                                                       */
+/* --------------------------------------------------------------------- */
+
+.tm-btn {
+  padding: calc(2 * var(--u)) calc(4 * var(--u));
+  font-size: var(--fs-sm);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--fg0);
+  background: var(--bg2);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-btn:not(:disabled):hover {
+  background: var(--bg3);
+  border-color: var(--fg2);
+}
+
+.tm-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.tm-btn--primary {
+  color: var(--bg0);
+  font-weight: 700;
+  background: var(--green);
+  border-color: var(--white);
+}
+
+.tm-btn--primary:not(:disabled):hover {
+  background: var(--white);
+}
+
+.tm-btn--danger {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.tm-btn--danger:not(:disabled):hover {
+  color: var(--white);
+  background: var(--red);
+}
+
+.tm-btn--lg {
+  padding: calc(3 * var(--u)) calc(8 * var(--u));
+  font-size: var(--fs);
+}
+
+/* --------------------------------------------------------------------- */
+/* full-screen overlays: title + meta                                    */
+/* --------------------------------------------------------------------- */
+
+.tm-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  /* `safe` keeps the top reachable when the list is taller than the screen */
+  justify-content: safe center;
+  gap: var(--gap2);
+  padding: calc(16 * var(--u)) calc(6 * var(--u)) calc(6 * var(--u));
+  overflow-y: auto;
+  background: var(--bg0);
+}
+
+.tm-title__logo {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--green);
+  text-shadow: calc(1 * var(--u)) calc(1 * var(--u)) 0 var(--green2),
+    0 0 calc(8 * var(--u)) rgba(78, 201, 78, 0.35);
+  text-align: center;
+}
+
+.tm-title__pitch {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--fs);
+  color: var(--fg1);
+  text-align: center;
+}
+
+/* The meta pitch is the second thing read, not the first. */
+.tm-title__pitch--meta {
+  margin-top: calc(2 * var(--u));
+  font-size: var(--fs-sm);
+  color: var(--fg2);
+}
+
+.tm-title__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  justify-content: center;
+}
+
+.tm-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap) var(--gap2);
+  justify-content: center;
+  font-size: var(--fs-sm);
+  letter-spacing: 0.1em;
+  color: var(--fg2);
+}
+
+/* meta / demos shop */
+.tm-meta__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap2);
+  width: 100%;
+  max-width: calc(260 * var(--px));
+}
+
+.tm-meta__demos {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--amber);
+}
+
+.tm-meta__list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(1 * var(--u));
+  width: 100%;
+  max-width: calc(260 * var(--px));
+}
+
+.tm-meta__row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: calc(2 * var(--u)) calc(3 * var(--u));
+  background: var(--bg1);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-meta__row.is-maxed {
+  border-color: var(--green2);
+}
+
+.tm-meta__row.is-locked {
+  opacity: 0.55;
+}
+
+.tm-meta__info {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tm-meta__name {
+  font-weight: 700;
+  color: var(--fg0);
+}
+
+.tm-meta__blurb {
+  font-size: var(--fs-sm);
+  color: var(--fg2);
+}
+
+.tm-meta__effect {
+  font-size: var(--fs-sm);
+  color: var(--green);
+}
+
+.tm-meta__level {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+  min-width: 6ch;
+  text-align: center;
+}
+
+.tm-meta__pips {
+  display: flex;
+  gap: calc(1 * var(--u));
+  justify-content: center;
+  margin-top: calc(1 * var(--u));
+}
+
+.tm-meta__pip {
+  width: calc(2 * var(--u));
+  height: calc(2 * var(--u));
+  background: var(--bg3);
+}
+
+.tm-meta__pip.is-on {
+  background: var(--green);
+}
+
+/* --------------------------------------------------------------------- */
+/* run over                                                              */
+/* --------------------------------------------------------------------- */
+
+.tm-over__title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.tm-over__title.is-lost {
+  color: var(--red);
+}
+
+.tm-over__title.is-won {
+  color: var(--green);
+}
+
+.tm-over__demos {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--amber);
+  text-align: center;
+}
+
+.tm-over__breakdown,
+.tm-over__stats {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+}
+
+.tm-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gap2);
+  padding: calc(0.5 * var(--u)) 0;
+  border-bottom: 1px dotted var(--bg3);
+}
+
+.tm-kv b {
+  color: var(--fg0);
+}
+
+/* --------------------------------------------------------------------- */
+/* options                                                               */
+/* --------------------------------------------------------------------- */
+
+.tm-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  font-size: var(--fs-sm);
+}
+
+.tm-opt > label,
+.tm-opt > span:first-child {
+  flex: 0 0 34%;
+  color: var(--fg1);
+}
+
+.tm-opt input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--green);
+}
+
+.tm-opt__value {
+  min-width: 5ch;
+  text-align: right;
+  color: var(--fg0);
+}
+
+.tm-toggle {
+  min-width: 6ch;
+  padding: calc(1 * var(--u)) calc(3 * var(--u));
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg2);
+  background: var(--bg2);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-toggle[aria-pressed="true"] {
+  color: var(--bg0);
+  background: var(--green);
+  border-color: var(--white);
+}
+
+/* --------------------------------------------------------------------- */
+/* toasts                                                                */
+/* --------------------------------------------------------------------- */
+
+.tm-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: calc(6 * var(--u));
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(1 * var(--u));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.tm-toast {
+  padding: calc(1 * var(--u)) calc(3 * var(--u));
+  font-size: var(--fs-sm);
+  color: var(--fg0);
+  background: var(--bg3);
+  border-left: calc(2 * var(--u)) solid var(--fg2);
+  animation: tm-toast-in 140ms ease-out;
+}
+
+.tm-toast--good {
+  border-left-color: var(--green);
+}
+
+.tm-toast--bad {
+  border-left-color: var(--red);
+  color: var(--white);
+}
+
+@keyframes tm-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(2 * var(--u)));
+  }
+}
+
+/* --------------------------------------------------------------------- */
+/* hotkey legend                                                         */
+/* --------------------------------------------------------------------- */
+
+.tm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(1 * var(--u)) var(--gap);
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+}
+
+.tm-legend kbd {
+  display: inline-block;
+  min-width: 3ch;
+  padding: 0 calc(1 * var(--u));
+  font: inherit;
+  text-align: center;
+  color: var(--fg1);
+  background: var(--bg2);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+/* --------------------------------------------------------------------- */
+/* motion preferences                                                    */
+/* --------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-ui *,
+  .tm-ui *::before,
+  .tm-ui *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.tm-ui[data-reduced-motion="1"] *,
+.tm-ui[data-reduced-motion="1"] *::before,
+.tm-ui[data-reduced-motion="1"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+/* --------------------------------------------------------------------- */
+/* about / credits                                                        */
+/* --------------------------------------------------------------------- */
+
+.tm-title__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  justify-content: center;
+  margin-top: var(--gap);
+}
+
+.tm-btn--quiet {
+  color: var(--fg2);
+  border-color: var(--line);
+  background: transparent;
+}
+
+.tm-btn--quiet:hover:not(:disabled) {
+  color: var(--fg0);
+}
+
+/* Ko-fi's own accent, kept inside the game's value range so it does not
+   scream louder than the slop counter. */
+.tm-btn--kofi {
+  color: var(--bg0);
+  background: var(--amber);
+  border-color: var(--white);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.tm-btn--kofi:hover {
+  background: var(--fg0);
+}
+
+.tm-about__credits {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: calc(1 * var(--u)) calc(4 * var(--u));
+  margin: var(--gap) 0 0;
+  font-size: var(--fs-sm);
+}
+
+.tm-about__credits dt {
+  color: var(--green);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: var(--fs-xs);
+  align-self: baseline;
+}
+
+.tm-about__credits dd {
+  margin: 0;
+  color: var(--fg1);
+}
+
+.tm-about__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin-top: var(--gap2);
+  padding-top: var(--gap);
+  border-top: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-about__thanks {
+  flex: 1 1 22ch;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg2);
+}
+
+/* --------------------------------------------------------------------- */
+/* demos tree                                                             */
+/* --------------------------------------------------------------------- */
+
+.tm-tree__scroll {
+  width: 100%;
+  overflow: auto;
+  padding-bottom: var(--gap);
+}
+
+.tm-tree {
+  position: relative;
+  margin: 0 auto;
+}
+
+.tm-tree__edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.tm-tree__edge {
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+/* A path you have actually opened. */
+.tm-tree__edge.is-lit {
+  stroke: var(--green2);
+}
+
+.tm-tree__root {
+  position: absolute;
+  padding: calc(1 * var(--u)) 0;
+  text-align: center;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg2);
+  border: calc(1 * var(--px)) solid var(--line);
+  background: var(--bg1);
+}
+
+.tm-node-wrap {
+  position: absolute;
+}
+
+.tm-node {
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  gap: calc(2 * var(--u));
+  padding: calc(2 * var(--u));
+  text-align: left;
+  color: var(--fg0);
+  background: var(--bg1);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+/* Unlocks add content; upgrades raise a number. Different node, different
+   silhouette — a dashed edge reads as "more of the same". */
+.tm-node--unlock {
+  border-color: var(--fg2);
+}
+
+.tm-node--upgrade {
+  border-style: dashed;
+}
+
+.tm-node:not(:disabled):hover {
+  border-color: var(--green);
+  background: var(--bg2);
+}
+
+.tm-node__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tm-node__name {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1.2;
+  /* Two lines maximum: "Multi-Harness Orchestrator" must not shove the cost
+     out of the node or push into the row below. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tm-node__effect {
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tm-node__cost {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.tm-node__pips {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.tm-node__pip {
+  width: calc(2 * var(--u));
+  height: calc(1 * var(--u));
+  background: var(--bg3);
+}
+
+.tm-node__pip.is-on {
+  background: var(--green);
+}
+
+.tm-node.is-owned {
+  border-color: var(--green);
+  background: var(--bg2);
+}
+
+.tm-node.is-owned .tm-node__cost {
+  color: var(--green);
+}
+
+.tm-node.is-dear .tm-node__cost {
+  color: var(--red);
+}
+
+/* One rung past the frontier: you can see the shape of what is next, not what
+   it is. Deeper nodes stay a stub so the tree never reads as a wall of ???. */
+.tm-node.is-teased {
+  opacity: 0.6;
+  border-style: dotted;
+}
+
+.tm-node.is-teased .tm-icon,
+.tm-node.is-hidden .tm-icon {
+  filter: brightness(0) saturate(0) opacity(0.45);
+}
+
+.tm-node.is-hidden {
+  opacity: 0.22;
+  border-style: dotted;
+}
+
+.tm-node:disabled {
+  cursor: default;
+}
+
+@media (max-width: 899px) {
+  .tm-tree__scroll {
+    max-height: 60vh;
+  }
+}
+
+/* --------------------------------------------------------------------- */
+/* tree tooltip                                                           */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Fixed to the viewport, not the tree: the tree scrolls, and a tooltip that
+ * scrolls with it would be clipped by the scroll box at exactly the moment it
+ * matters — on the outermost nodes.
+ */
+.tm-tip {
+  position: fixed;
+  z-index: 60;
+  max-width: 44ch;
+  padding: calc(3 * var(--u));
+  pointer-events: none;
+  background: var(--bg0);
+  border: calc(1 * var(--px)) solid var(--green);
+  box-shadow: 0 calc(3 * var(--u)) calc(8 * var(--u)) rgba(0, 0, 0, 0.7);
+}
+
+.tm-tip__title {
+  font-size: var(--fs);
+  font-weight: 700;
+  color: var(--fg0);
+}
+
+.tm-tip__kind {
+  margin-top: 1px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.tm-tip__blurb {
+  margin: calc(2 * var(--u)) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+  line-height: 1.5;
+}
+
+.tm-tip__blurb:empty,
+.tm-tip__effect:empty,
+.tm-tip__meta:empty {
+  display: none;
+}
+
+.tm-tip__effect {
+  margin: calc(1 * var(--u)) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--fg0);
+}
+
+.tm-tip__meta {
+  margin-top: calc(2 * var(--u));
+  padding-top: calc(2 * var(--u));
+  border-top: calc(1 * var(--px)) solid var(--line);
+  font-size: var(--fs-xs);
+  color: var(--amber);
+}
+
+
+/*
+ * Touch targets.
+ *
+ * The whole layout is sized in integer multiples of the 320x180 stage, which at
+ * px=1 on a phone makes the primary controls about 24px tall — proportionally
+ * correct for the pixel art, and genuinely hard to hit with a thumb. Where the
+ * pointer is coarse, the controls that matter get a real 44px target without
+ * disturbing the crisp integer layout on a mouse-driven screen.
+ */
+@media (pointer: coarse) {
+  .tm-ui .tm-ship,
+  .tm-ui .tm-btn,
+  .tm-ui .tm-qty {
+    min-height: 44px;
+  }
+
+  /* Shop rows are the other thing a thumb has to land on repeatedly. */
+  .tm-ui .tm-row {
+    min-height: 44px;
+  }
+}
+
+/* --------------------------------------------------------------------- */
+/* achievements                                                          */
+/* --------------------------------------------------------------------- */
+
+.tm-achv {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--gap);
+  padding: var(--gap2);
+  overflow: auto;
+}
+
+.tm-achv__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap);
+  flex: 0 0 auto;
+}
+
+.tm-achv__count {
+  font-size: var(--fs-sm);
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.tm-achv__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(112 * var(--px)), 1fr));
+  gap: var(--gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tm-achv__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gap);
+  padding: var(--gap);
+  border: calc(1 * var(--px)) solid var(--line);
+  background: var(--bg1);
+  /* Locked entries read as absent rather than as content. */
+  opacity: 0.55;
+}
+
+.tm-achv__row.is-earned {
+  opacity: 1;
+  border-color: var(--green);
+  background: var(--bg2);
+}
+
+/* A hidden achievement gives away nothing at all until it is earned: the icon
+   is blacked out to a silhouette, not just dimmed. */
+.tm-achv__row.is-secret .tm-achv__icon {
+  filter: brightness(0) contrast(0);
+  opacity: 0.4;
+}
+
+.tm-achv__body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.5 * var(--u));
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tm-achv__name {
+  font-size: var(--fs-sm);
+  color: var(--fg0);
+}
+
+.tm-achv__row.is-earned .tm-achv__name {
+  color: var(--green);
+}
+
+.tm-achv__blurb {
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--fg2);
+}
+
+.tm-achv__stamp {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.12em;
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+
+/* --------------------------------------------------------------------- */
+/* achievement unlocked popup                                            */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Bottom-right, above everything, and never in the way: the layer is
+ * pointer-transparent so a card cannot swallow a click on the shop rail
+ * underneath it.
+ */
+.tm-achv-pop {
+  position: fixed;
+  right: var(--gap2);
+  bottom: var(--gap2);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--gap);
+  pointer-events: none;
+}
+
+.tm-achv-pop__card {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  max-width: calc(150 * var(--px));
+  padding: var(--gap);
+  border: calc(1 * var(--px)) solid var(--green);
+  background: var(--bg1);
+  box-shadow: 0 0 calc(6 * var(--u)) rgba(78, 201, 78, 0.25);
+  /* Parked off-screen to the right; `.is-in` slides it home. */
+  transform: translateX(calc(100% + var(--gap2)));
+  opacity: 0;
+  transition:
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms linear;
+}
+
+.tm-achv-pop__card.is-in {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+/* Reduced motion: appear and disappear, no travel. */
+.tm-achv-pop__card.is-static {
+  transition: none;
+}
+
+.tm-ui[data-reduced-motion="1"] .tm-achv-pop__card {
+  transition: opacity 120ms linear;
+  transform: none;
+}
+
+.tm-achv-pop__icon {
+  flex: 0 0 auto;
+  /* 3x the 16px cell — bigger than a shop tile, still a whole multiple so the
+     pixels never land between screen pixels. */
+  --isz: 48px;
+}
+
+.tm-achv-pop__body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.5 * var(--u));
+  min-width: 0;
+}
+
+.tm-achv-pop__kicker {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.tm-achv-pop__name {
+  font-size: var(--fs);
+  font-weight: 700;
+  color: var(--fg0);
+}
+
+.tm-achv-pop__blurb {
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--fg1);
+}

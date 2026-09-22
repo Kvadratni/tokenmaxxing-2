@@ -1,0 +1,425 @@
+/*
+ * Help overlay (`src/ui/help.ts`) and first-run coach marks (`src/ui/coach.ts`).
+ *
+ * Both live inside `.tm-ui`, so `--px`, `--u`, `--gap` and the `--fs*` type
+ * scale all resolve from there. Nothing here hard-codes a colour: every value
+ * comes out of `src/styles/palette.css`.
+ */
+
+/* --------------------------------------------------------------------- */
+/* help overlay                                                          */
+/* --------------------------------------------------------------------- */
+
+/* Wider than a stock dialog — the wireframe needs the room. */
+.tm-help .tm-modal__panel {
+  width: min(100%, calc(420 * var(--px)));
+  gap: calc(3 * var(--u));
+}
+
+.tm-help__rule {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--u));
+  padding: calc(3 * var(--u)) calc(4 * var(--u));
+  background: var(--bg2);
+  border-left: calc(2 * var(--px)) solid var(--green);
+}
+
+/* The one rule, in the largest type in the game outside the wallet. */
+.tm-help__rule-line {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--green);
+  text-shadow: 0 0 calc(3 * var(--u)) rgba(78, 201, 78, 0.3);
+}
+
+/*
+ * The meta loop's headline. Loud, because players genuinely miss that the
+ * tree exists — but a step down from `--rule-line`, so the overlay still has
+ * exactly one biggest thing on it.
+ */
+.tm-help__rule-line--meta {
+  font-size: var(--fs-lg);
+  text-shadow: none;
+}
+
+.tm-help__sec {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--u));
+  padding-top: calc(3 * var(--u));
+  border-top: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-help__h {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg0);
+}
+
+.tm-help__p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+}
+
+.tm-help__note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+}
+
+/* --------------------------------------------------------------------- */
+/* the run-screen wireframe                                              */
+/* --------------------------------------------------------------------- */
+
+.tm-help__fig {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--u));
+  margin: 0;
+}
+
+.tm-help__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--bg0);
+  border: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-help__svg text {
+  font-family: var(--font);
+  font-size: 13px;
+  fill: var(--fg1);
+}
+
+.tm-help__frame {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+.tm-help__chrome,
+.tm-help__panel {
+  fill: var(--bg1);
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+.tm-help__slot {
+  fill: var(--bg2);
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+.tm-help__stage {
+  fill: var(--bg0);
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+.tm-help__pill {
+  fill: var(--bg3);
+  stroke: none;
+}
+
+.tm-help__bar {
+  fill: var(--bg3);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.tm-help__bar-fill {
+  fill: var(--green);
+}
+
+.tm-help__bar-burn {
+  fill: var(--red);
+}
+
+.tm-help__cta {
+  fill: var(--green);
+  stroke: var(--white);
+  stroke-width: 2;
+}
+
+.tm-help__tab {
+  fill: var(--bg2);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.tm-help__tab--on {
+  fill: var(--bg3);
+  stroke: var(--green);
+}
+
+.tm-help__lid {
+  fill: var(--bg2);
+  stroke: var(--fg2);
+  stroke-width: 2;
+}
+
+.tm-help__screen {
+  fill: var(--blue);
+  opacity: 0.55;
+}
+
+.tm-help__base {
+  fill: var(--bg3);
+  stroke: var(--fg2);
+  stroke-width: 2;
+}
+
+.tm-help__t--dim {
+  fill: var(--fg2);
+  font-size: 11px;
+}
+
+.tm-help__t--brand {
+  fill: var(--green);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+}
+
+.tm-help__t--big {
+  fill: var(--white);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.tm-help__t--warn {
+  fill: var(--amber);
+  font-size: 11px;
+}
+
+.tm-help__t--cta {
+  fill: var(--bg0);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tm-help__badge circle {
+  fill: var(--green);
+  stroke: var(--bg0);
+  stroke-width: 2;
+}
+
+.tm-help__badge text {
+  fill: var(--bg0);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------- */
+/* legend, loop, unit ladder                                             */
+/* --------------------------------------------------------------------- */
+
+.tm-help__legend,
+.tm-help__steps {
+  display: flex;
+  flex-direction: column;
+  gap: calc(1.5 * var(--u));
+  margin: 0;
+  padding-left: calc(7 * var(--u));
+  font-size: var(--fs-sm);
+  color: var(--fg1);
+}
+
+.tm-help__legend li::marker,
+.tm-help__steps li::marker {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.tm-help__legend-name {
+  color: var(--fg0);
+}
+
+.tm-help__ladder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(1 * var(--u)) calc(3 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+}
+
+.tm-help__ladder li {
+  white-space: nowrap;
+}
+
+.tm-help__ladder b {
+  color: var(--green);
+}
+
+/* --------------------------------------------------------------------- */
+/* controls table                                                        */
+/* --------------------------------------------------------------------- */
+
+.tm-help__keys {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.tm-help__keys th,
+.tm-help__keys td {
+  padding: calc(1.5 * var(--u)) 0;
+  vertical-align: top;
+  border-bottom: calc(1 * var(--px)) solid var(--bg2);
+}
+
+/* `width: 1%` shrink-wraps the key column and hands the rest to the copy. */
+.tm-help__keys th {
+  width: 1%;
+  padding-right: calc(4 * var(--u));
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.tm-help__keys td {
+  color: var(--fg1);
+}
+
+.tm-help__keys kbd {
+  display: inline-block;
+  margin-right: calc(1 * var(--u));
+  padding: 0 calc(1.5 * var(--u));
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  color: var(--fg0);
+  background: var(--bg2);
+  border: calc(1 * var(--px)) solid var(--line);
+  border-bottom-width: calc(2 * var(--px));
+}
+
+.tm-help__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  padding-top: calc(3 * var(--u));
+  border-top: calc(1 * var(--px)) solid var(--line);
+}
+
+.tm-help__foot .tm-help__note {
+  flex: 1 1 22ch;
+}
+
+/* --------------------------------------------------------------------- */
+/* coach marks                                                           */
+/* --------------------------------------------------------------------- */
+
+/*
+ * The layer itself is a live region with no box of its own: it must never
+ * intercept a click meant for the laptop underneath it.
+ */
+.tm-coach {
+  /*
+   * Zero-sized on purpose. This is only a positioning root and a live region —
+   * every bubble inside is itself `position: fixed` and placed in viewport
+   * coordinates by src/ui/coach.ts, so the layer needs no box of its own.
+   *
+   * It used to be `inset: 0`. A fixed element sized from the containing block
+   * picks up any horizontal overflow the page already has, so on a 320px screen
+   * it measured 322 and then *kept* the document 322 wide — a 2px scrollbar
+   * that sustained itself. A layer with no width cannot do that.
+   */
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 36; /* over the chrome (30), under any modal (40) */
+  pointer-events: none;
+}
+
+.tm-coach__tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: calc(2 * var(--u));
+  max-width: min(calc(100vw - 8 * var(--u)), calc(150 * var(--px)));
+  padding: calc(2 * var(--u)) calc(3 * var(--u));
+  pointer-events: auto;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--bg0);
+  background: var(--amber);
+  border: calc(1 * var(--px)) solid var(--white);
+  box-shadow: 0 calc(2 * var(--u)) calc(6 * var(--u)) rgba(0, 0, 0, 0.55);
+  animation: tm-coach-in 160ms ease-out;
+}
+
+/* No anchor to pin to (or nothing measurable): park it out of the way. */
+.tm-coach__tip.is-corner {
+  left: auto;
+  top: auto;
+  right: calc(4 * var(--u));
+  bottom: calc(4 * var(--u));
+}
+
+.tm-coach__text {
+  flex: 1 1 auto;
+}
+
+.tm-coach__x {
+  flex: 0 0 auto;
+  padding: 0 calc(1 * var(--u));
+  font-size: var(--fs);
+  line-height: 1;
+  color: var(--bg0);
+  background: transparent;
+  border: 0;
+}
+
+.tm-coach__x:hover {
+  color: var(--red);
+}
+
+.tm-coach__tip :focus-visible {
+  outline: max(2px, calc(1 * var(--px))) solid var(--bg0);
+  outline-offset: calc(1 * var(--u));
+}
+
+@keyframes tm-coach-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-2 * var(--u)));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --------------------------------------------------------------------- */
+/* motion preferences                                                    */
+/* --------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-coach__tip,
+  .tm-help__rule-line {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.tm-ui[data-reduced-motion="1"] .tm-coach__tip {
+  animation: none !important;
+  transition: none !important;
+}

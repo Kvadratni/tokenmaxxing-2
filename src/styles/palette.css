@@ -1,0 +1,43 @@
+/*
+ * Tokenmaxxing palette.
+ *
+ * These values MUST stay byte-identical to `src/render/palette.ts` (owned by the
+ * RENDER agent). This file deliberately does NOT import from TypeScript so the
+ * DOM chrome has zero coupling to the renderer module graph.
+ */
+
+:root {
+  /* backgrounds, darkest -> lightest */
+  --bg0: #14161a;
+  --bg1: #1e2127;
+  --bg2: #252a31;
+  --bg3: #2f353e;
+  --line: #3c434e;
+
+  /* foregrounds, dimmest -> brightest */
+  --fg2: #6b7482;
+  --fg1: #9aa4b2;
+  --fg0: #d7dee8;
+
+  /* accents */
+  --green: #4ec94e;
+  --green2: #2f8f3a;
+  --amber: #e8b34a;
+  --red: #e5484d;
+  --blue: #4a9de8;
+  --purple: #9b6bd6;
+  --white: #f2f6fb;
+
+  /* derived, UI-only */
+  --rarity-common: var(--fg1);
+  --rarity-uncommon: var(--blue);
+  --rarity-rare: var(--purple);
+
+  /*
+   * Integer pixel scale. This is the boot default; src/ui/scale.ts overrides it
+   * on the `.tm-ui` element itself. Type sizes derived from it MUST be declared
+   * on `.tm-ui` too (custom properties substitute at their declaring element),
+   * which is why they live in ui.css.
+   */
+  --px: 3px;
+}
