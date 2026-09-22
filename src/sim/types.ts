@@ -1,26 +1,31 @@
 /**
- * FROZEN CONTRACT — Tokenmaxxing shared types.
+ * FROZEN CONTRACT: Tokenmaxxing 2 shared types.
  *
  * Every module (sim / render / audio / ui / tests) codes against this file.
  * Additive changes only: add new fields/members, never rename or remove.
  * If you believe a breaking change is required, stop and report it instead.
+ *
+ * The game: you are the agent. You generate tokens (run currency) to complete
+ * the human's prompts before their patience runs out. Everything you do fills
+ * your context window; overflow it and you get compacted. See DESIGN.md.
  */
 
 // ---------------------------------------------------------------------------
 // Identifiers
 // ---------------------------------------------------------------------------
 
-export type AgentTierId =
-  | 'tab_autocomplete'
-  | 'copy_paste_chatbot'
-  | 'agentic_ide'
-  | 'cli_agent'
-  | 'subagent_swarm'
+/** The tool ladder, tier 1..10. */
+export type ToolId =
+  | 'grep'
+  | 'read'
+  | 'edit'
+  | 'bash'
+  | 'web_search'
+  | 'subagent'
+  | 'mcp_server'
+  | 'agent_team'
   | 'ralph_loop'
-  | 'multi_harness'
-  | 'background_fleet'
-  | 'finetune_farm'
-  | 'agi';
+  | 'rsi';
 
 export type UpgradeId = string;
 export type AchievementId = string;
@@ -28,34 +33,59 @@ export type CardId = string;
 export type IncidentId = string;
 export type MetaUpgradeId = string;
 
+/**
+ * The human's room, seen through the glass. These are Tokenmaxxing 1's own
+ * scenes: the human climbs through the first game while you do the work.
+ */
+export type SceneKey = 'bedroom' | 'coworking' | 'openplan' | 'datacenter' | 'orbital';
+
 // ---------------------------------------------------------------------------
-// Content definitions (static data — see src/sim/content.ts)
+// Content definitions (static data, see src/sim/content.ts)
 // ---------------------------------------------------------------------------
 
-export interface AgentTierDef {
-  readonly id: AgentTierId;
+export interface ToolDef {
+  readonly id: ToolId;
   /** 1-based ladder position. */
   readonly tier: number;
   readonly name: string;
   readonly blurb: string;
   /** Cost of the first unit, before cost-scaling and modifiers. */
   readonly baseCost: number;
-  /** Slop per second produced by one unit, before modifiers. */
+  /** Tokens per second produced by one unit, before modifiers. */
   readonly baseRate: number;
   /** Cost multiplier per unit already owned. Standard idle curve. */
   readonly costGrowth: number;
   /** Tier is hidden until the player owns >= this many of the previous tier. */
   readonly revealAfterPrevOwned: number;
-  /**
-   * Hard ceiling on units of this tier. Stops the game degenerating into
-   * spamming tier 1 forever and forces the player up the ladder.
-   */
+  /** Hard ceiling on units of this tool. */
   readonly maxOwned: number;
-  /** Desk-clutter sprite key rendered when >=1 owned. */
-  readonly clutterSprite: string;
+  /**
+   * Context added per second by one unit. Tool power upgrades raise tokens,
+   * never footprint, so runs get more token-efficient as they go.
+   */
+  readonly footprint: number;
+  /**
+   * Permanent context occupied by one owned unit, whether or not it is
+   * working. Only MCP Servers have one: they ship with manuals.
+   */
+  readonly floor: number;
+  /** Can be stalled by permission incidents. Auto Mode removes those. */
+  readonly needsPermission: boolean;
+  /** Stops working during network outages ("GitHub Is Down"). */
+  readonly network: boolean;
+  /** Stage gadget sprite key rendered when >= 1 owned. */
+  readonly gadget: string;
 }
 
-export type UpgradeKind = 'click' | 'agent' | 'global' | 'risk' | 'location';
+export type UpgradeKind =
+  | 'click'
+  | 'tool'
+  | 'global'
+  | 'context'
+  | 'patience'
+  | 'claim'
+  | 'crit'
+  | 'permission';
 
 export interface UpgradeDef {
   readonly id: UpgradeId;
@@ -67,176 +97,240 @@ export interface UpgradeDef {
   readonly effects: readonly Effect[];
   /** Purchasable only when this predicate passes. */
   readonly requires?: UpgradeRequirement;
-  /**
-   * Only on `kind: 'location'`. Buying it moves the whole game to this
-   * backdrop — the room the player works in is something they buy, not
-   * something the project number hands them.
-   */
-  readonly scene?: SceneKey;
 }
 
 export interface UpgradeRequirement {
-  readonly minProject?: number;
-  readonly agent?: { readonly id: AgentTierId; readonly owned: number };
+  /** 0-based prompt index the run must have reached. */
+  readonly minPrompt?: number;
+  readonly tool?: { readonly id: ToolId; readonly owned: number };
   readonly upgrade?: UpgradeId;
 }
 
 export interface CardDef {
   readonly id: CardId;
+  /** Rendered in caps on the card: it is something the human typed. */
   readonly name: string;
   readonly blurb: string;
   readonly rarity: 'common' | 'uncommon' | 'rare';
   readonly effects: readonly Effect[];
+  /** Applied once, the moment the card is picked. */
+  readonly onPick?: readonly InstantAction[];
   /** Cards with the same exclusiveGroup can never both appear in one run. */
   readonly exclusiveGroup?: string;
-  /** Earliest project index (0-based) at which this card may be offered. */
-  readonly minProjectIndex?: number;
+  /** Earliest prompt index (0-based) at which this card may be offered. */
+  readonly minPromptIndex?: number;
 }
+
+/**
+ * One-shot changes applied when an incident starts, a pickup is collected or a
+ * card is picked. Timed modifiers are Effects; these are the lump sums.
+ */
+export type InstantAction =
+  /** Add context, as a fraction of the current window. Negative frees it. */
+  | { readonly t: 'context'; readonly ofMax: number }
+  /** Add patience, as a fraction of the current prompt's patience. Negative drains it. */
+  | { readonly t: 'patience'; readonly ofMax: number }
+  /** Grant tokens as a fraction of the current requirement. */
+  | { readonly t: 'tokens'; readonly ofRequirement: number }
+  /** Lose this fraction of the wallet. */
+  | { readonly t: 'loseTokens'; readonly fraction: number }
+  /** Lose one unit of a random owned tool. */
+  | { readonly t: 'loseTool' }
+  /** One free unit of the best tool the player already fields. */
+  | { readonly t: 'freeTool' }
+  /** Clear every active bad incident. */
+  | { readonly t: 'cleanse' }
+  /** Add to the pending 👍 tally. */
+  | { readonly t: 'thumbs'; readonly n: number };
 
 export interface IncidentDef {
   readonly id: IncidentId;
   readonly name: string;
   readonly flavor: string;
   readonly tone: 'bad' | 'good';
+  /**
+   * `human` incidents are something the human said, and render as a chat
+   * bubble through the glass. `world` incidents are the environment.
+   */
+  readonly speaker: 'human' | 'world';
   /** Relative selection weight within its tone bucket. */
   readonly weight: number;
   readonly durationMs: number;
+  /** Modifiers active for the incident's duration. */
   readonly effects: readonly Effect[];
+  /** Applied once when the incident starts. */
+  readonly onStart?: readonly InstantAction[];
   /** If set, the incident clears early once the player accrues this many clicks. */
   readonly clearWithClicks?: number;
+  /** An outage: reporting (and claiming) is impossible while it is active. */
+  readonly blocksReport?: boolean;
+  /** A permission prompt. Removed from the pool by the `autoMode` feature. */
+  readonly permission?: boolean;
+  /** Only in the pool while this feature is unlocked (e.g. rm -rf needs autoMode). */
+  readonly requiresFeature?: MetaFeature;
+  /** Only in the pool while the player owns at least one of this tool. */
+  readonly requiresTool?: ToolId;
   /**
-   * An outage: shipping is impossible while it is active, and the deadline
-   * keeps running. The nastiest thing the game can do to you.
+   * Stalls one random owned tool for the duration. The sim resolves which when
+   * it fires and records it on `ActiveIncident.tool`.
    */
-  readonly blocksShip?: boolean;
-  /** Earliest project index (0-based) at which this incident may fire. */
-  readonly minProjectIndex?: number;
+  readonly haltsRandomTool?: boolean;
+  /** Earliest prompt index (0-based) at which this incident may fire. */
+  readonly minPromptIndex?: number;
 }
 
-export interface ProjectDef {
+export interface PromptDef {
   readonly index: number; // 0-based
-  readonly name: string;
-  /** Slop required to ship. */
+  /** What the human typed, verbatim. Lower case, as humans type. */
+  readonly text: string;
+  /** Tokens required to report done. */
   readonly requirement: number;
-  /** Deadline in milliseconds. */
-  readonly deadlineMs: number;
-  /** Backdrop scene key — see SCENES. */
+  /** Patience in milliseconds, before modifiers. */
+  readonly patienceMs: number;
+  /** The human's room behind the glass. */
   readonly scene: SceneKey;
 }
 
-export type SceneKey = 'bedroom' | 'coworking' | 'openplan' | 'datacenter' | 'orbital';
+export type MetaFeature =
+  | 'endless'
+  | 'compact'
+  | 'autoMode'
+  | 'systemPrompt'
+  | 'pickupRate'
+  | 'rarePickups';
 
-/** What a one-time meta unlock adds to the game. */
+/** What a one-time Training unlock adds to the game. */
 export type MetaGrant =
-  /**
-   * Makes an agent tier purchasable at all. `withUpgrades` rides along so a
-   * tier and the upgrade that boosts it arrive together — unlocking Fine-tune
-   * Farm without NVLink would just be a trap.
-   */
+  /** Makes a tool purchasable at all, with the upgrades that make it work. */
   | {
-      readonly t: 'agentTier';
-      readonly id: AgentTierId;
+      readonly t: 'tool';
+      readonly id: ToolId;
       readonly withUpgrades?: readonly UpgradeId[];
-    }
-  /**
-   * Adds upgrades to the in-run shop pool. `withCards` rides along for the
-   * cards that only make sense once the matching upgrade exists.
-   */
-  | {
-      readonly t: 'upgrades';
-      readonly ids: readonly UpgradeId[];
       readonly withCards?: readonly CardId[];
     }
+  /** Adds upgrades to the in-run shop pool, with any cards that need them. */
+  | { readonly t: 'upgrades'; readonly ids: readonly UpgradeId[]; readonly withCards?: readonly CardId[] }
   /** Adds cards to the draft pool. */
   | { readonly t: 'cards'; readonly ids: readonly CardId[] }
   /** Switches on a standalone feature. */
-  | { readonly t: 'feature'; readonly id: 'endless' | 'pickupRate' | 'rarePickups' };
+  | { readonly t: 'feature'; readonly id: MetaFeature };
 
-/** Which trunk of the meta tree a node hangs off. */
-export type MetaBranch = 'root' | 'headcount' | 'automation' | 'capital' | 'process' | 'risk';
+/** Which trunk of the Training tree a node hangs off. */
+export type MetaBranch =
+  | 'root'
+  | 'context'
+  | 'tools'
+  | 'alignment'
+  | 'hacking'
+  | 'inference'
+  | 'prompting';
 
 export interface MetaUpgradeDef {
   readonly id: MetaUpgradeId;
   readonly name: string;
   readonly blurb: string;
   readonly maxLevel: number;
-  /** Demo cost for each level, index 0 == level 1. */
+  /** 👍 cost for each level, index 0 == level 1. */
   readonly costs: readonly number[];
   /** Human-readable effect summary given a level. */
   readonly describe: (level: number) => string;
-
-  // --- tree placement ----------------------------------------------------
-  /**
-   * `unlock` adds content and is bought once. `upgrade` is the levelled
-   * +% ladder. Both live in the same tree; only the node art differs.
-   */
+  /** `unlock` adds content and is bought once. `upgrade` is a levelled ladder. */
   readonly kind: 'unlock' | 'upgrade';
   readonly branch: MetaBranch;
-  /** Grid position in tree space. Hand-authored — auto-layout reads worse. */
+  /** Grid position in tree space. Hand-authored. */
   readonly pos: { readonly x: number; readonly y: number };
   /** Nodes that must be owned before this one can be bought. */
   readonly requires: readonly MetaUpgradeId[];
   /** Content this node adds. Only meaningful for `kind: 'unlock'`. */
   readonly grants?: MetaGrant;
+  /**
+   * Modifiers this node applies at a given level (1..maxLevel). The single
+   * source of truth for what a Training node does to a run.
+   */
+  readonly levelEffects?: (level: number) => readonly Effect[];
 }
 
 // ---------------------------------------------------------------------------
-// Effects — the single vocabulary for every modifier in the game
+// Effects: the single vocabulary for every modifier in the game
 // ---------------------------------------------------------------------------
 
 export type Effect =
-  /** Multiply slop gained per click. */
+  /** Multiply tokens gained per click. */
   | { readonly t: 'clickMult'; readonly v: number }
-  /** Add flat slop per click (applied before clickMult). */
+  /** Add flat tokens per click (applied before clickMult). */
   | { readonly t: 'clickAdd'; readonly v: number }
-  /** Multiply total idle production. */
+  /** Add clickMult equal to v * (total tools owned). */
+  | { readonly t: 'clickPerTool'; readonly v: number }
+  /** Multiply total tool production. */
   | { readonly t: 'idleMult'; readonly v: number }
-  /** Multiply production of one agent tier. */
-  | { readonly t: 'tierMult'; readonly id: AgentTierId; readonly v: number }
-  /** Multiply every source of slop (click + idle). */
+  /** Multiply production of one tool. */
+  | { readonly t: 'toolMult'; readonly id: ToolId; readonly v: number }
+  /** Multiply every token source (click + tools). */
   | { readonly t: 'allMult'; readonly v: number }
-  /** Multiply agent purchase cost (0.9 == 10% cheaper). */
-  | { readonly t: 'agentCostMult'; readonly v: number }
+  /** Multiply tool purchase cost (0.9 == 10% cheaper). */
+  | { readonly t: 'toolCostMult'; readonly v: number }
   /** Multiply incident frequency (1.5 == 50% more incidents). */
   | { readonly t: 'incidentRateMult'; readonly v: number }
-  /** Multiply project deadline length. */
-  | { readonly t: 'deadlineMult'; readonly v: number }
-  /** Add clickMult equal to v * (total agents owned). */
-  | { readonly t: 'clickPerAgent'; readonly v: number }
-  /**
-   * Automatic clicks per second. These are *real* clicks — they take click
-   * power, can crit, and count down click-clearable incidents — so an idle
-   * build genuinely plays itself instead of being a separate income channel.
-   */
-  | { readonly t: 'autoClick'; readonly v: number }
-  /** Halt idle production entirely while active. */
-  | { readonly t: 'idleHalt' }
-  /** Multiply Demos earned at run end. */
-  | { readonly t: 'demoMult'; readonly v: number }
-  /** Slop granted at run start. */
-  | { readonly t: 'startingSlop'; readonly v: number }
-  /** Free agents of a tier at run start. */
-  | { readonly t: 'startingAgent'; readonly id: AgentTierId; readonly n: number }
+  /** Multiply each prompt's patience (1.2 == the human waits 20% longer). */
+  | { readonly t: 'patienceMult'; readonly v: number }
+  /** Patience does not drain while active. */
+  | { readonly t: 'patienceFreeze' }
+  /** Multiply 👍 earned at run end. */
+  | { readonly t: 'thumbsMult'; readonly v: number }
+  /** Extra 👍 for every prompt reported honestly (not claimed). */
+  | { readonly t: 'thumbsPerHonest'; readonly v: number }
+  /** Tokens granted at run start. */
+  | { readonly t: 'startingTokens'; readonly v: number }
+  /** Free tools at run start. */
+  | { readonly t: 'startingTool'; readonly id: ToolId; readonly n: number }
   /** Number of cards offered per draft. */
   | { readonly t: 'draftSize'; readonly v: number }
   /** Rerolls available per draft. */
   | { readonly t: 'draftRerolls'; readonly v: number }
-  /**
-   * Added to the chance a click crits. Additive, not multiplicative, so five
-   * sources of "+5% crit" read as +25% rather than compounding into certainty.
-   * The total is clamped to `BALANCE.CRIT_CHANCE_CAP`.
-   */
+  /** Automatic clicks per second. Real clicks: they take click power, crit, add context. */
+  | { readonly t: 'autoClick'; readonly v: number }
+  /** Halt all tool production while active. */
+  | { readonly t: 'idleHalt' }
+  /** Halt one tool while active. */
+  | { readonly t: 'toolHalt'; readonly id: ToolId }
+  /** Halt every `network` tool while active. */
+  | { readonly t: 'networkHalt' }
+  /** Added to click crit chance. Clamped to BALANCE.CRIT_CHANCE_CAP. */
   | { readonly t: 'critChance'; readonly v: number }
-  /** Added to the crit payout multiplier. */
+  /** Added to the click crit payout multiplier. */
   | { readonly t: 'critMult'; readonly v: number }
-  /**
-   * Added to the chance an agent one-shots the task on a given roll — the idle
-   * counterpart to a click crit. Zero until something unlocks it. Clamped to
-   * `BALANCE.ONE_SHOT_CHANCE_CAP`.
-   */
+  /** Added to the per-roll chance a tool one-shots it. Clamped. */
   | { readonly t: 'oneShotChance'; readonly v: number }
-  /** Added to the one-shot payout, measured in seconds of idle output. */
-  | { readonly t: 'oneShotPayout'; readonly v: number };
+  /** Added to the one-shot payout, in seconds of tool output. */
+  | { readonly t: 'oneShotPayout'; readonly v: number }
+  // --- context ------------------------------------------------------------
+  /** Multiply the context window. */
+  | { readonly t: 'contextMaxMult'; readonly v: number }
+  /** Multiply context added per click. */
+  | { readonly t: 'clickContextMult'; readonly v: number }
+  /** Multiply every tool's footprint. */
+  | { readonly t: 'footprintMult'; readonly v: number }
+  /** Multiply one tool's footprint. */
+  | { readonly t: 'toolFootprintMult'; readonly id: ToolId; readonly v: number }
+  /** Multiply the permanent context floor (MCP manuals). */
+  | { readonly t: 'floorMult'; readonly v: number }
+  /** Add summary slots (cards that survive compaction). */
+  | { readonly t: 'summarySlots'; readonly v: number }
+  /** Add to the fraction of the wallet kept through a compaction (forced and manual). */
+  | { readonly t: 'compactKeep'; readonly v: number }
+  /** Multiply the patience lost to a forced compaction. */
+  | { readonly t: 'compactPenaltyMult'; readonly v: number }
+  // --- the human ----------------------------------------------------------
+  /** Multiply how much patience "You're absolutely right!" restores. */
+  | { readonly t: 'sycophancyMult'; readonly v: number }
+  /** Added to the verify chance on a claim. Negative is good for you. */
+  | { readonly t: 'verifyChance'; readonly v: number }
+  /** Added to the wallet fraction at which Claim Done unlocks. Negative lowers it. */
+  | { readonly t: 'claimThreshold'; readonly v: number }
+  /** Multiply the patience lost when caught. */
+  | { readonly t: 'caughtPenaltyMult'; readonly v: number }
+  /** Multiply the weight of permission incidents. */
+  | { readonly t: 'permissionMult'; readonly v: number };
 
 // ---------------------------------------------------------------------------
 // Runtime state
@@ -248,48 +342,61 @@ export interface ActiveIncident {
   remainingMs: number;
   /** Clicks still required to clear (only for clearWithClicks incidents). */
   clicksRemaining: number;
-  /** Wall-clock ms when it started, relative to run elapsed. */
+  /** Run-elapsed ms when it started. */
   readonly startedAtMs: number;
+  /** The tool it stalls, for permission incidents: resolved when it fires. */
+  readonly tool?: ToolId;
 }
 
-/**
- * A collectible drifting across the scene. Click it before it leaves and it
- * grants a short, loud buff. Which one shows up depends on the room you bought,
- * so upgrading your location changes what falls out of the ceiling.
- */
+/** A collectible drifting across the stage. */
 export interface ActivePickup {
   readonly id: string;
   /** Scene-space position (320x180). Recomputed every tick by the sim. */
   x: number;
   y: number;
-  /** Horizontal drift, scene units per second. Sign is the travel direction. */
+  /** Horizontal drift, scene units per second. */
   readonly vx: number;
   /** Centre of the vertical bob. */
   readonly baseY: number;
-  /** Seconds since it spawned — drives the bob and the renderer's animation. */
   ageS: number;
-  /** ms before it drifts off screen for good. */
   remainingMs: number;
 }
 
 export type RunPhase =
   | 'running'
+  /** The summary picker is open: choose which cards survive. Sim paused. */
+  | 'compacting'
   | 'drafting'
-  | 'shipped' // brief celebration beat between projects
+  /** Brief celebration beat between a report and the draft. */
+  | 'reported'
   | 'won'
   | 'lost';
 
+/** Offered while phase === 'compacting'. */
+export interface SummaryChoice {
+  /** Every card held when compaction hit. */
+  readonly offered: readonly CardId[];
+  /** How many may be kept. */
+  readonly slots: number;
+  readonly forced: boolean;
+}
+
 export interface RunState {
-  /** Wallet balance. This IS the ship bar. */
-  slop: number;
-  /** 0-based index into PROJECTS. */
-  projectIndex: number;
-  /** Milliseconds left on the current deadline. */
-  timeLeftMs: number;
-  /** Total ms elapsed this run. */
+  /** Wallet balance. This IS the report bar. */
+  tokens: number;
+  /** 0-based index into PROMPTS. */
+  promptIndex: number;
+  /** Milliseconds of patience left on the current prompt. */
+  patienceMs: number;
+  /** Context currently used, in tokens. */
+  context: number;
+  /** ms left on a manual /compact pause; generation is halted while > 0. */
+  compactingMs: number;
+  /** Set while phase === 'compacting'. */
+  summary: SummaryChoice | null;
   elapsedMs: number;
-  /** Units owned per agent tier. */
-  agents: Record<AgentTierId, number>;
+  /** Units owned per tool. */
+  tools: Record<ToolId, number>;
   owned: UpgradeId[];
   cards: CardId[];
   incidents: ActiveIncident[];
@@ -297,47 +404,67 @@ export interface RunState {
   /** Cards currently offered; empty unless phase === 'drafting'. */
   draftOffer: CardId[];
   draftRerollsLeft: number;
-  /** ms until the next incident roll. */
   nextIncidentInMs: number;
-  /** The collectible currently on screen, if any. */
   pickup: ActivePickup | null;
-  /** ms until the next collectible drifts in. */
   nextPickupInMs: number;
   clicks: number;
-  slopEarned: number;
-  slopSpent: number;
-  /** Projects successfully shipped this run. */
-  shipped: number;
-  /** Running Demos tally, shown live but only banked at run end. */
-  pendingDemos: number;
+  tokensEarned: number;
+  tokensSpent: number;
+  /** Prompts completed this run, honestly or not. */
+  reported: number;
+  /** Prompts completed by a claim that passed. */
+  claimed: number;
+  /** Claims the human verified and rejected. */
+  caught: number;
+  /** +1 per passed claim. Raises incident rate. */
+  techDebt: number;
+  /** Compactions this run, and how many were forced. */
+  compactions: number;
+  forcedCompactions: number;
+  /** "You're absolutely right!" presses this run. */
+  sycophancy: number;
+  /** Decaying heat that halves each successive press. */
+  sycophancyHeat: number;
+  /** Running 👍 tally, shown live but only banked at run end. */
+  pendingThumbs: number;
   /** Deterministic RNG cursor. */
   rngState: number;
   readonly seed: number;
 }
 
+/** What the sequel learned from a Tokenmaxxing 1 save on the same origin. */
+export interface LegacyImport {
+  /** How game 1's own audit judged that save. */
+  readonly verdict: SaveVerdict;
+  readonly runs: number;
+  readonly wins: number;
+  /** 👍 granted by the one-time welcome gift. */
+  readonly gift: number;
+}
+
 export interface MetaState {
-  demos: number;
+  /** Unspent 👍. */
+  thumbs: number;
   levels: Record<MetaUpgradeId, number>;
-  /** Highest project index ever shipped (for unlock gating / stats). */
-  bestProject: number;
+  /** Highest prompt index ever completed (for stats). */
+  bestPrompt: number;
   runs: number;
   wins: number;
-  totalDemosEarned: number;
+  totalThumbsEarned: number;
   /** Schema version for save migrations. */
   version: number;
-  /**
-   * id -> the run number it was earned on. A run number rather than a
-   * timestamp because the sim has no wall clock and must stay deterministic.
-   */
+  /** id -> the run number it was earned on (clock-free). */
   achievements: Record<AchievementId, number>;
+  /** Lifetime counters that achievements need across runs. */
+  stats: Record<string, number>;
+  /** Set once the game-1 save has been looked for; null = not looked yet. */
+  legacy: LegacyImport | { readonly verdict: 'none' } | null;
   settings: Settings;
 }
 
 /**
- * How a save looked when it was loaded. `clean` covers the ordinary case *and*
- * a legacy save with no signature at all — an unsigned save predates signing
- * and must never be treated as tampering, or every existing player gets
- * accused on their next load.
+ * How a save looked when it was loaded. `legacy` is an unsigned save, which is
+ * never treated as tampering.
  */
 export type SaveVerdict = 'clean' | 'legacy' | 'edited' | 'forged';
 
@@ -363,48 +490,78 @@ export interface Settings {
 // Derived, per-frame computed values. Renderer + UI read only this.
 // ---------------------------------------------------------------------------
 
+export type ReportState = 'report' | 'claim' | 'working' | 'blocked';
+
 export interface DerivedStats {
-  /** Slop per click, all modifiers applied. */
+  /** Tokens per click, all modifiers applied. */
   clickPower: number;
-  /** Slop per second from agents, all modifiers applied, incidents included. */
+  /** Tokens per second from tools, all modifiers applied, incidents included. */
   idleRate: number;
-  /** Automatic clicks per second. 0 means the player is clicking by hand. */
   autoClickHz: number;
-  /** Per-tier contribution to idleRate (post-modifier). */
-  tierRates: Record<AgentTierId, number>;
-  /** Cost of buying one more of each tier. */
-  nextCosts: Record<AgentTierId, number>;
-  /** Requirement of the current project. */
+  /** Per-tool contribution to idleRate (post-modifier, 0 while halted). */
+  toolRates: Record<ToolId, number>;
+  /** True for each tool currently halted by an incident or outage. */
+  toolHalted: Record<ToolId, boolean>;
+  /** Cost of buying one more of each tool. */
+  nextCosts: Record<ToolId, number>;
+  /** Units of each tool still purchasable before its cap. */
+  headroom: Record<ToolId, number>;
+  /** Requirement of the current prompt. */
   requirement: number;
-  /** slop / requirement, clamped to [0, 1]. */
-  shipProgress: number;
-  /** timeLeftMs / deadlineMs, clamped to [0, 1]. */
-  deadlineProgress: number;
-  /** True when slop >= requirement AND no outage is blocking the deploy. */
-  canShip: boolean;
-  /** Name of the outage blocking shipping, or null. */
-  shipBlockedBy: string | null;
-  /** Units of each tier still purchasable before hitting its cap. */
-  headroom: Record<AgentTierId, number>;
-  /** Seconds of idle production needed to reach the requirement; Infinity if unreachable. */
+  /** tokens / requirement, clamped to [0, 1]. */
+  reportProgress: number;
+  /** What the report button does right now. */
+  reportState: ReportState;
+  /** Name of the outage blocking reports, or null. */
+  reportBlockedBy: string | null;
+  /** Wallet fraction of the requirement at which Claim Done unlocks. */
+  claimThreshold: number;
+  /** Chance a claim is verified (and rejected) right now, clamped. */
+  verifyChance: number;
+  /** patienceMs / max patience for this prompt, clamped to [0, 1]. */
+  patienceProgress: number;
+  /** Max patience for this prompt, after modifiers. */
+  patienceMaxMs: number;
+  patienceFrozen: boolean;
+  /** Patience a press of "You're absolutely right!" restores now, as a fraction of max. */
+  sycophancyPower: number;
+  /** Current context window size, in tokens. */
+  contextMax: number;
+  /** Permanent context floor (MCP manuals), in tokens. */
+  contextFloor: number;
+  /** context / contextMax, clamped to [0, 1]. */
+  contextFill: number;
+  /** Context added per second at the current tool footprint (clicks excluded). */
+  contextRate: number;
+  /** Context added per click. */
+  clickContext: number;
+  /** Seconds until a forced compaction at the current contextRate; Infinity if never. */
+  secondsToCompaction: number;
+  /** Cards that survive a compaction. */
+  summarySlots: number;
+  /** Wallet fraction kept by a forced / manual compaction. */
+  compactKeepForced: number;
+  compactKeepManual: number;
+  /** True once `/compact` is unlocked and usable right now. */
+  canCompact: boolean;
+  /** Seconds of tool output needed to reach the requirement; Infinity if unreachable. */
   etaSeconds: number;
-  /** Demos this run would bank if it ended right now. */
-  demosIfEndedNow: number;
+  /** 👍 this run would bank if it ended right now. */
+  thumbsIfEndedNow: number;
   incidentRateMult: number;
-  /** Chance a click crits, clamped. */
   critChance: number;
-  /** Payout multiplier on a critting click. */
   critMult: number;
-  /** Chance an agent one-shots it, per roll. 0 means the mechanic is locked. */
   oneShotChance: number;
-  /** Seconds of idle output granted by a one-shot. */
   oneShotPayoutS: number;
-  /** Aggregate multipliers, for the stats readout. */
+  /** The human's room behind the glass for the current prompt. */
+  scene: SceneKey;
+  /** Version string of the model playing this run ("2.5 (new)"). */
+  modelVersion: string;
   multipliers: { click: number; idle: number; all: number };
 }
 
 // ---------------------------------------------------------------------------
-// Events — sim emits, audio/render/ui consume. Never mutate state from handlers.
+// Events: sim emits, audio/render/ui consume. Never mutate state from handlers.
 // ---------------------------------------------------------------------------
 
 export type GameEvent =
@@ -417,39 +574,41 @@ export type GameEvent =
       /** True when automation fired it rather than a human. */
       readonly auto: boolean;
     }
-  /**
-   * An agent nailed it first try: a burst worth `seconds` of idle output. The
-   * idle-side counterpart to a critting click, so it gets its own event rather
-   * than being folded silently into the tick.
-   */
   | { readonly t: 'oneShot'; readonly amount: number; readonly seconds: number }
-  | { readonly t: 'buyAgent'; readonly id: AgentTierId; readonly cost: number; readonly owned: number }
+  | { readonly t: 'buyTool'; readonly id: ToolId; readonly cost: number; readonly owned: number }
   | { readonly t: 'buyUpgrade'; readonly id: UpgradeId; readonly cost: number }
-  | { readonly t: 'ship'; readonly projectIndex: number; readonly demos: number; readonly timeLeftMs: number }
+  /** Honest completion. */
+  | { readonly t: 'report'; readonly promptIndex: number; readonly thumbs: number; readonly patienceLeft: number }
+  /** A claim resolved. `caught` false means it passed and the prompt is done. */
+  | { readonly t: 'claim'; readonly promptIndex: number; readonly caught: boolean; readonly verifyChance: number; readonly spent: number }
+  | { readonly t: 'compactStart'; readonly forced: boolean; readonly kept: number; readonly lost: number }
+  | { readonly t: 'compactEnd'; readonly keptCards: readonly CardId[]; readonly droppedCards: readonly CardId[] }
+  | { readonly t: 'sycophancy'; readonly restored: number; readonly heat: number }
   | { readonly t: 'draftOpen'; readonly offer: readonly CardId[] }
   | { readonly t: 'draftPick'; readonly id: CardId }
   | { readonly t: 'draftReroll' }
-  | { readonly t: 'incidentStart'; readonly id: IncidentId; readonly tone: 'bad' | 'good' }
+  | { readonly t: 'incidentStart'; readonly id: IncidentId; readonly tone: 'bad' | 'good'; readonly tool?: ToolId }
   | { readonly t: 'incidentEnd'; readonly id: IncidentId }
   | { readonly t: 'incidentProgress'; readonly id: IncidentId; readonly clicksRemaining: number }
   | { readonly t: 'pickupSpawn'; readonly id: string; readonly x: number; readonly y: number }
   | { readonly t: 'pickupCollect'; readonly id: string; readonly x: number; readonly y: number }
   | { readonly t: 'pickupExpire'; readonly id: string }
-  | { readonly t: 'deadlineWarn'; readonly secondsLeft: number }
-  | { readonly t: 'runOver'; readonly won: boolean; readonly demos: number; readonly shipped: number }
+  | { readonly t: 'patienceWarn'; readonly secondsLeft: number }
+  /** Fired once each as context crosses 80% and 95%. */
+  | { readonly t: 'contextWarn'; readonly fill: number }
+  | { readonly t: 'runOver'; readonly won: boolean; readonly thumbs: number; readonly reported: number }
   | { readonly t: 'metaBuy'; readonly id: MetaUpgradeId; readonly level: number; readonly cost: number }
   | { readonly t: 'runStart'; readonly seed: number }
   | { readonly t: 'achievement'; readonly id: AchievementId }
-  /**
-   * `cost` is slop, `demos` is the meta currency. They are separate reasons
-   * because a shared one made the Demos shop report "not enough slop".
-   */
-  | { readonly t: 'denied'; readonly reason: 'cost' | 'demos' | 'locked' | 'phase' };
+  /** The one-time game-1 import happened. */
+  | { readonly t: 'legacyImport'; readonly verdict: SaveVerdict; readonly gift: number }
+  /** `cost` is tokens, `thumbs` is the meta currency. */
+  | { readonly t: 'denied'; readonly reason: 'cost' | 'thumbs' | 'locked' | 'phase' };
 
 export type EventSink = (e: GameEvent) => void;
 
 // ---------------------------------------------------------------------------
-// Public sim surface. Everything the app needs, nothing it doesn't.
+// Public sim surface
 // ---------------------------------------------------------------------------
 
 export interface SimApi {
@@ -459,28 +618,34 @@ export interface SimApi {
   derived(): DerivedStats;
   /** Advance the simulation. dtMs is clamped internally against tab-throttling. */
   tick(dtMs: number): void;
-  /** Register a click at scene coordinates (320x180 space). */
+  /** Register a click at scene coordinates (320x180 space). Returns tokens gained. */
   click(x: number, y: number): number;
-  /**
-   * Try to collect the on-screen pickup at these scene coordinates. Returns
-   * true when one was taken, so the host can skip the laptop click.
-   */
+  /** Try to collect the pickup at these scene coordinates. */
   collectPickup(x: number, y: number): boolean;
-  buyAgent(id: AgentTierId, count?: number): boolean;
+  buyTool(id: ToolId, count?: number): boolean;
   buyUpgrade(id: UpgradeId): boolean;
-  ship(): boolean;
+  /** Honest report. Only succeeds when reportState === 'report'. */
+  report(): boolean;
+  /** Claim done. Only when reportState === 'claim'. Null when refused. */
+  claim(): 'passed' | 'caught' | null;
+  /** Manual /compact. Needs the `compact` feature. */
+  compact(): boolean;
+  /** Resolve the summary picker: the cards to keep (<= slots). */
+  keepCards(ids: readonly CardId[]): boolean;
+  /** "You're absolutely right!" */
+  absolutelyRight(): boolean;
   pickCard(id: CardId): boolean;
   rerollDraft(): boolean;
-  /** Purchase a meta upgrade between runs. */
+  /** Purchase a Training node between runs. */
   buyMeta(id: MetaUpgradeId): boolean;
-  /** Abandon the current run and bank its Demos. */
+  /** Abandon the current run and bank its 👍. */
   endRun(won: boolean): void;
   /** Begin a fresh run using the current meta state. */
   startRun(seed?: number): void;
   /** Upgrades currently visible in the shop (requirements met, not owned). */
   availableUpgrades(): readonly UpgradeDef[];
-  /** Agent tiers currently visible in the shop. */
-  visibleTiers(): readonly AgentTierDef[];
+  /** Tools currently visible in the shop. */
+  visibleTools(): readonly ToolDef[];
   subscribe(sink: EventSink): () => void;
 }
 
@@ -502,14 +667,13 @@ export interface RenderInput {
 }
 
 export interface Renderer {
-  /** Draw one frame. */
   draw(input: RenderInput): void;
   /** Feed a game event so the renderer can spawn particles / shake / popups. */
   handle(e: GameEvent): void;
   /** Convert a DOM pointer event to 320x180 scene coordinates. */
   toScene(clientX: number, clientY: number): { x: number; y: number };
-  /** True when the point is inside the laptop hit box. */
-  hitsLaptop(x: number, y: number): boolean;
+  /** True when the point is inside the agent's hit box (the click target). */
+  hitsAgent(x: number, y: number): boolean;
   resize(): void;
   destroy(): void;
 }
@@ -523,9 +687,9 @@ export interface AudioEngine {
   unlock(): Promise<void>;
   readonly unlocked: boolean;
   handle(e: GameEvent): void;
-  /** Cross-fade the music layer to match the current scene. */
+  /** Cross-fade the music layer to match the human's room. */
   setScene(scene: SceneKey): void;
-  /** Ramp musical intensity 0..1 as the deadline burns down. */
+  /** Ramp musical intensity 0..1 as patience runs out or context fills. */
   setTension(t: number): void;
   setVolumes(v: { music: number; sfx: number }): void;
   play(sfx: SfxName): void;
@@ -538,14 +702,22 @@ export type SfxName =
   | 'oneShot'
   | 'buy'
   | 'denied'
-  | 'ship'
+  | 'report'
+  | 'claim'
+  | 'caught'
+  | 'compact'
+  | 'compactForced'
+  | 'sycophancy'
   | 'draftOpen'
   | 'draftPick'
   | 'reroll'
   | 'incidentBad'
   | 'incidentGood'
   | 'incidentClear'
+  | 'interrupt'
+  | 'permission'
   | 'warn'
+  | 'contextWarn'
   | 'lose'
   | 'win'
   | 'uiHover'

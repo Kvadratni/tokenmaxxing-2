@@ -1,5 +1,5 @@
 /**
- * FROZEN CONTRACT — `data-testid` values.
+ * FROZEN CONTRACT: `data-testid` values.
  *
  * UI must render exactly these ids. QA selects exclusively on them, never on
  * CSS classes or text content. Additive changes only.
@@ -8,26 +8,39 @@ export const TID = {
   // shell
   app: 'app',
   scene: 'scene-canvas',
-  laptop: 'laptop-hit',
+  /** Invisible hit target over the agent: the thing you click to generate. */
+  agent: 'agent-hit',
 
   // HUD
-  slop: 'hud-slop',
-  slopRate: 'hud-slop-rate',
+  tokens: 'hud-tokens',
+  tokenRate: 'hud-token-rate',
   clickPower: 'hud-click-power',
-  /** Live incident-rate multiplier — the risk dial. */
+  /** Live incident-rate multiplier. Tech debt pushes it up. */
   incidentRisk: 'hud-incident-risk',
-  /** Crit chance / one-shot chance. Hidden while both are at their base. */
+  /** Crit / one-shot chance. Hidden while both are at their base. */
   critChance: 'hud-crit',
-  projectName: 'hud-project-name',
-  projectNum: 'hud-project-num',
-  shipBar: 'hud-ship-bar',
-  shipBarFill: 'hud-ship-bar-fill',
+  promptText: 'hud-prompt-text',
+  promptNum: 'hud-prompt-num',
+  reportBar: 'hud-report-bar',
+  reportBarFill: 'hud-report-bar-fill',
   requirement: 'hud-requirement',
-  deadlineBar: 'hud-deadline-bar',
-  deadlineFill: 'hud-deadline-fill',
-  deadlineText: 'hud-deadline-text',
-  demoTally: 'hud-demo-tally',
-  shipButton: 'ship-button',
+  patienceBar: 'hud-patience-bar',
+  patienceFill: 'hud-patience-fill',
+  patienceText: 'hud-patience-text',
+  contextBar: 'hud-context-bar',
+  contextFill: 'hud-context-fill',
+  contextText: 'hud-context-text',
+  /** The manual /compact button. Hidden until the Training unlock. */
+  compactButton: 'compact-button',
+  /** "You're absolutely right!" */
+  sycophancyButton: 'sycophancy-button',
+  thumbsTally: 'hud-thumbs-tally',
+  /** One button, three states: REPORT DONE / CLAIM DONE / WORKING. */
+  reportButton: 'report-button',
+  /** Live verify chance, shown while the button reads CLAIM DONE. */
+  verifyChance: 'hud-verify-chance',
+  techDebt: 'hud-tech-debt',
+  modelVersion: 'hud-model-version',
   incidentBanner: 'incident-banner',
   incidentName: 'incident-name',
   incidentTimer: 'incident-timer',
@@ -35,29 +48,26 @@ export const TID = {
 
   // shop
   shop: 'shop',
-  tabAgents: 'tab-agents',
+  tabTools: 'tab-tools',
   tabUpgrades: 'tab-upgrades',
-  agentList: 'agent-list',
+  toolList: 'tool-list',
   upgradeList: 'upgrade-list',
-  /** `${agentRow}-${tierId}` */
-  agentRow: 'agent-row',
-  /** `${agentCost}-${tierId}` */
-  agentCost: 'agent-cost',
-  /** `${agentOwned}-${tierId}` */
-  agentOwned: 'agent-owned',
+  /** `${toolRow}-${toolId}` */
+  toolRow: 'tool-row',
+  /** `${toolCost}-${toolId}` */
+  toolCost: 'tool-cost',
+  /** `${toolOwned}-${toolId}` */
+  toolOwned: 'tool-owned',
+  /** `${toolFootprint}-${toolId}`: context per second this tool adds. */
+  toolFootprint: 'tool-footprint',
   /** `${upgradeRow}-${upgradeId}` */
   upgradeRow: 'upgrade-row',
   buyQtyToggle: 'buy-qty-toggle',
-  /**
-   * Opens/closes the shop drawer. Only present (unhidden) on a short viewport —
-   * a landscape phone or a squat window — where the shop is a bottom sheet
-   * instead of a block in the flow.
-   */
+  /** Opens/closes the shop drawer on a short viewport. */
   shopToggle: 'shop-toggle',
-  /** The dimmed layer behind an open shop drawer. Tapping it closes the sheet. */
   shopScrim: 'shop-scrim',
 
-  // draft
+  // draft ("The human is prompt engineering")
   draftModal: 'draft-modal',
   /** `${draftCard}-${cardId}` */
   draftCard: 'draft-card',
@@ -66,50 +76,58 @@ export const TID = {
   /** Commits the highlighted card. Picking is deliberately two-step. */
   draftConfirm: 'draft-confirm',
 
-  // run over / meta
+  // compaction summary picker
+  summaryModal: 'summary-modal',
+  /** `${summaryCard}-${cardId}`: toggles whether the card is kept. */
+  summaryCard: 'summary-card',
+  summarySlots: 'summary-slots',
+  summaryConfirm: 'summary-confirm',
+
+  // run over / Training
   runOverModal: 'run-over-modal',
   runOverTitle: 'run-over-title',
-  runOverDemos: 'run-over-demos',
+  runOverThumbs: 'run-over-thumbs',
+  /** "Releasing Tokenmaxxing 2.5 (new)". */
+  runOverVersion: 'run-over-version',
   runOverContinue: 'run-over-continue',
-  /** The 'Demos are permanent, spend them on the tree' line. */
+  /** The '👍 are permanent, spend them in Training' line. */
   runOverCarry: 'run-over-carry',
   metaScreen: 'meta-screen',
-  metaDemos: 'meta-demos',
+  metaThumbs: 'meta-thumbs',
   /** `${metaRow}-${metaId}` */
   metaRow: 'meta-row',
   /** `${metaBuy}-${metaId}` */
   metaBuy: 'meta-buy',
-  /** Floating detail panel for the focused/hovered tree node. */
   metaTip: 'meta-tip',
   startRun: 'start-run',
-  /** Achievements screen, off the title. */
   achievementsScreen: 'achievements-screen',
   achievementsButton: 'title-achievements',
   achievementsCount: 'achievements-count',
   /** `${achievementRow}-${id}` */
   achievementRow: 'achievement-row',
-  /** Steam-style unlock popup, bottom-right. */
   achievementPopup: 'achievement-popup',
   /** `${achievementPopupCard}-${id}` */
   achievementPopupCard: 'achievement-popup-card',
   titleScreen: 'title-screen',
+  /** One-time notice that a Tokenmaxxing 1 save was found. */
+  legacyNotice: 'legacy-notice',
 
   // about / credits
   aboutButton: 'about-button',
   aboutModal: 'about-modal',
   aboutClose: 'about-close',
   kofiLink: 'kofi-link',
-  /** Link to the source, on the title menu and in About. */
   repoLink: 'repo-link',
+  /** Link back to the first game. */
+  prequelLink: 'prequel-link',
 
   // how to play
   helpButton: 'help-button',
   helpModal: 'help-modal',
   helpClose: 'help-close',
   helpControls: 'help-controls',
-  /** The 'Between runs' explainer — the meta loop. */
+  /** The 'Between sessions' explainer: the Training loop. */
   helpMeta: 'help-meta',
-  /** First-run coach marks. `coachTip`/`coachDismiss` are scoped by tip id. */
   coach: 'coach',
   coachTip: 'coach-tip',
   coachDismiss: 'coach-dismiss',
@@ -125,45 +143,52 @@ export const TID = {
   toast: 'toast',
 } as const;
 
-/** Build a scoped testid, e.g. `tid(TID.agentRow, 'cli_agent')`. */
+/** Build a scoped testid, e.g. `tid(TID.toolRow, 'grep')`. */
 export function tid(base: string, suffix?: string): string {
   return suffix ? `${base}-${suffix}` : base;
 }
 
 /**
  * The hook the QA harness drives the game through. `src/main.ts` assigns this
- * to `window.__TOKENMAXXING__` so Playwright can inspect and steer a run
+ * to `window.__TOKENMAXXING2__` so Playwright can inspect and steer a run
  * without pixel-hunting. Guarded by `import.meta.env.DEV` OR the
  * `?testhooks=1` query param so it is inert in a normal production load.
  */
 export interface TestHooks {
-  readonly version: 1;
+  readonly version: 2;
   /** Live snapshot of sim state. Structured-cloneable. */
   snapshot(): unknown;
   /** Fast-forward the simulation by N milliseconds without waiting. */
   advance(ms: number): void;
-  /** Grant slop directly (test-only). */
+  /** Grant tokens directly. */
   grant(amount: number): void;
+  /** Grant unspent 👍 directly. */
+  grantThumbs(n: number): void;
   /** Start a run with a fixed seed for reproducible tests. */
   startRun(seed: number): void;
-  /** Force a specific incident to fire now. */
   forceIncident(id: string): void;
-  /** Drop a specific pickup on screen at the given scene coords. */
   forcePickup(id: string, x?: number, y?: number): void;
-  /** Force the next draft offer. */
   forceDraft(ids: string[]): void;
-  /** Simulate N clicks on the laptop. */
-  clickLaptop(n: number): void;
-  /** Set the sim's time scale (1 = normal). */
+  /** Simulate N clicks on the agent. */
+  clickAgent(n: number): void;
+  /** Set context to this fraction of the window (0..1). 1 forces a compaction. */
+  setContext(fill: number): void;
+  /** Set patience to this fraction of the prompt's max (0..1). */
+  setPatience(fill: number): void;
+  /** Force the outcome of the next claim's verify roll; null restores the dice. */
+  forceVerify(outcome: 'pass' | 'catch' | null): void;
+  /**
+   * Pretend a Tokenmaxxing 1 save (raw JSON text) was found, then run the
+   * one-time import. Cross-origin dev servers can't see the real one.
+   */
+  importLegacy(raw: string): void;
   setTimeScale(k: number): void;
-  /** Wipe persisted meta progression. */
   resetSave(): void;
-  /** Everything the renderer drew last frame, for visual assertions. */
   renderStats(): { fps: number; particles: number; sprites: number; missingSprites: string[] };
 }
 
 declare global {
   interface Window {
-    __TOKENMAXXING__?: TestHooks;
+    __TOKENMAXXING2__?: TestHooks;
   }
 }
