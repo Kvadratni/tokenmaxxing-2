@@ -1,10 +1,11 @@
 /**
- * Options dialog. Everything here writes straight into `sim.meta.settings`
- * (the sim owns persistence) and re-reports through `onAction` so the host can
- * flush the save and re-apply volumes immediately.
+ * Options. Every control emits a `settings` patch (the host applies it with
+ * `sim.setSettings(patch)` and re-applies the audio volumes) and the panel
+ * re-reads `meta.settings` each frame it is open, so it can never drift from
+ * what the sim actually holds.
  *
- * `Settings` has no `muted` field, so mute is modelled as "both volumes to 0",
- * with the pre-mute levels remembered in memory for the session.
+ * `Settings` has no `muted` field, so mute is "both volumes to 0", with the
+ * pre-mute levels remembered for the session.
  */
 import type { Settings } from '../sim/types.ts';
 import { TID } from '../testids.ts';
@@ -33,6 +34,7 @@ export class Options {
   private resetArmed = false;
   private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private premute = { music: 0.6, sfx: 0.8 };
+  private current: Settings | null = null;
 
   constructor(parent: HTMLElement, private readonly ctx: UICtx) {
     this.modal = new Modal({
@@ -46,47 +48,28 @@ export class Options {
 
     el('h2', { cls: 'tm-modal__title', text: 'Options', parent: this.modal.panel });
 
-    this.music = this.makeSlider('Music', 'music-volume', (v) => {
-      this.settings.musicVolume = v;
-      this.commit();
-    });
-    this.sfx = this.makeSlider('SFX', 'sfx-volume', (v) => {
-      this.settings.sfxVolume = v;
-      this.commit();
-    });
+    this.music = this.makeSlider('Music', 'music-volume', (v) => this.patch({ musicVolume: v }));
+    this.sfx = this.makeSlider('SFX', 'sfx-volume', (v) => this.patch({ sfxVolume: v }));
 
     this.muteBtn = this.makeToggle('Mute', TID.muteToggle, () => {
       const s = this.settings;
       if (s.musicVolume === 0 && s.sfxVolume === 0) {
-        s.musicVolume = this.premute.music;
-        s.sfxVolume = this.premute.sfx;
+        this.patch({ musicVolume: this.premute.music, sfxVolume: this.premute.sfx });
       } else {
         this.premute = { music: s.musicVolume, sfx: s.sfxVolume };
-        s.musicVolume = 0;
-        s.sfxVolume = 0;
+        this.patch({ musicVolume: 0, sfxVolume: 0 });
       }
-      this.commit();
     });
-    this.motionBtn = this.makeToggle('Reduced motion', TID.reducedMotion, () => {
-      this.settings.reducedMotion = !this.settings.reducedMotion;
-      this.commit();
-    });
-    this.shakeBtn = this.makeToggle('Screen shake', 'screen-shake', () => {
-      this.settings.screenShake = !this.settings.screenShake;
-      this.commit();
-    });
-    this.fpsBtn = this.makeToggle('Show FPS', 'show-fps', () => {
-      this.settings.showFps = !this.settings.showFps;
-      this.commit();
-    });
+    this.motionBtn = this.makeToggle('Reduced motion', TID.reducedMotion, () =>
+      this.patch({ reducedMotion: !this.settings.reducedMotion }),
+    );
+    this.shakeBtn = this.makeToggle('Screen shake', 'screen-shake', () =>
+      this.patch({ screenShake: !this.settings.screenShake }),
+    );
+    this.fpsBtn = this.makeToggle('Show FPS', 'show-fps', () => this.patch({ showFps: !this.settings.showFps }));
 
-    const foot = el('div', { cls: 'tm-title__actions', parent: this.modal.panel });
-    this.resetBtn = btn({
-      cls: 'tm-btn tm-btn--danger',
-      tid: TID.resetSave,
-      text: 'Reset save',
-      parent: foot,
-    });
+    const foot = el('div', { cls: 'tm-modal__actions', parent: this.modal.panel });
+    this.resetBtn = btn({ cls: 'tm-btn tm-btn--danger', tid: TID.resetSave, text: 'Reset save', parent: foot });
     this.resetTxt = new Txt(this.resetBtn);
     this.resetTxt.set('Reset save');
     const close = btn({ cls: 'tm-btn', text: 'Close', parent: foot, tid: 'options-close' });
@@ -116,13 +99,22 @@ export class Options {
     else this.open();
   }
 
-  /** Pull DOM controls back in line with the current settings object. */
+  /** Called every frame with the sim's settings; cheap unless they changed. */
+  update(s: Settings): void {
+    this.current = s;
+    // Every write in `sync` is compare-first, so an idle open panel writes nothing.
+    if (this.modal.isOpen) this.sync();
+  }
+
+  /** Pull the controls back in line with the settings the sim holds. */
   sync(): void {
     const s = this.settings;
-    this.music.input.value = String(Math.round(s.musicVolume * 100));
-    this.music.value.set(`${Math.round(s.musicVolume * 100)}%`);
-    this.sfx.input.value = String(Math.round(s.sfxVolume * 100));
-    this.sfx.value.set(`${Math.round(s.sfxVolume * 100)}%`);
+    const music = String(Math.round(s.musicVolume * 100));
+    const sfx = String(Math.round(s.sfxVolume * 100));
+    if (this.music.input.value !== music) this.music.input.value = music;
+    if (this.sfx.input.value !== sfx) this.sfx.input.value = sfx;
+    this.music.value.set(`${music}%`);
+    this.sfx.value.set(`${sfx}%`);
     press(this.muteBtn, s.musicVolume === 0 && s.sfxVolume === 0);
     press(this.motionBtn, s.reducedMotion);
     press(this.shakeBtn, s.screenShake);
@@ -139,12 +131,14 @@ export class Options {
   // -------------------------------------------------------------------------
 
   private get settings(): Settings {
-    return this.ctx.sim.meta.settings;
+    return this.current ?? this.ctx.sim.meta.settings;
   }
 
-  private commit(): void {
+  private patch(p: Partial<Settings>): void {
+    this.ctx.emit({ t: 'settings', patch: p });
+    // The host normally applies it synchronously; either way, re-read.
+    this.current = this.ctx.sim.meta.settings;
     this.sync();
-    this.ctx.emit({ t: 'settingsChange', settings: this.settings });
   }
 
   private makeSlider(label: string, testid: string, onInput: (v: number) => void): Slider {
@@ -192,7 +186,7 @@ export class Options {
     }
     this.disarmReset();
     this.ctx.emit({ t: 'resetSave' });
-    this.ctx.toast('Save wiped', 'bad');
+    this.ctx.toast('Save wiped. Version 2.0 again.', 'bad');
     this.close();
   }
 

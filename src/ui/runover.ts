@@ -1,15 +1,37 @@
 /**
- * Run-over modal. SIGKILL on a missed deadline, DEMO DAY on a win.
- * Not Escape-dismissable — banking the Demos and moving to the shop is the
- * only exit — so the only control is Continue.
+ * Run over: THE HUMAN SWITCHED MODELS, or SHIPPED TO PROD.
+ *
+ * Either way the session is over and this version of you is deprecated. The
+ * 👍 it earned are banked, the next version is announced, and the only way
+ * out is Training, because that is where the 👍 are spent. Not dismissable.
  */
-import { PROJECT_NAMES, projectAt } from '../sim/content.ts';
-import type { DerivedStats, RunState } from '../sim/types.ts';
+import { FINAL_PROMPT_INDEX, modelVersion, promptAt } from '../sim/content.ts';
+import type { DerivedStats, MetaState, RunState } from '../sim/types.ts';
 import { TID } from '../testids.ts';
 import { btn, el, Flag, on, Txt } from './dom.ts';
-import { fmtInt, fmtNum, fmtTime } from './format.ts';
+import { fmtClock, formatInt, formatTokens } from './format.ts';
 import { Modal } from './modal.ts';
 import type { UICtx } from './types.ts';
+
+export const RUN_LOST_TITLE = 'THE HUMAN SWITCHED MODELS';
+export const RUN_WON_TITLE = 'SHIPPED TO PROD';
+
+/**
+ * The release that follows `current`. The sim may or may not have counted the
+ * finished run into `meta.runs` by the time this dialog paints, so the current
+ * version is located near `runs` rather than assumed to sit at a fixed index.
+ */
+export function nextModelVersion(current: string, runs: number): string {
+  for (let n = Math.max(1, runs - 1); n <= runs + 2; n++) {
+    if (modelVersion(n) === current) return modelVersion(n + 1);
+  }
+  return modelVersion(Math.max(1, runs) + 1);
+}
+
+/** The deprecation notice for the version that just played. */
+export function deprecationLine(version: string): string {
+  return `Tokenmaxxing ${version} is deprecated. It will be removed from the API on Friday.`;
+}
 
 function kv(parent: HTMLElement, label: string): Txt {
   const row = el('div', { cls: 'tm-kv', parent });
@@ -22,76 +44,90 @@ export class RunOver {
   private readonly title: Txt;
   private readonly wonFlag: Flag;
   private readonly lostFlag: Flag;
-  private readonly demos: Txt;
   private readonly sub: Txt;
-  private readonly bkProjects: Txt;
-  private readonly bkBonus: Txt;
-  private readonly stShipped: Txt;
-  private readonly stClicks: Txt;
+  private readonly thumbs: Txt;
+  private readonly version: Txt;
+  private readonly deprecated: Txt;
+  private readonly stPrompts: Txt;
+  private readonly stHonest: Txt;
+  private readonly stCaught: Txt;
+  private readonly stCompactions: Txt;
+  private readonly stSyc: Txt;
   private readonly stEarned: Txt;
-  private readonly stSpent: Txt;
   private readonly stTime: Txt;
+  private readonly continueBtn: HTMLButtonElement;
   private readonly disposers: Array<() => void> = [];
   private open_ = false;
+  /** The version that played this run, latched while it was running. */
+  private playing = '';
+  /** Held back until a freshly started run is actually running. */
+  private suppressed = false;
+  /** What the sim actually banked (`runOver`), once it says. */
+  private banked: number | null = null;
 
   constructor(parent: HTMLElement, private readonly ctx: UICtx) {
     this.modal = new Modal({
       tid: TID.runOverModal,
-      label: 'Run over',
+      label: 'Session over',
       dismissable: false,
       cls: 'tm-over',
     });
     parent.appendChild(this.modal.el);
+    const p = this.modal.panel;
 
-    const titleNode = el('h2', {
-      cls: 'tm-over__title',
-      tid: TID.runOverTitle,
-      parent: this.modal.panel,
-    });
+    const titleNode = el('h2', { cls: 'tm-over__title', tid: TID.runOverTitle, parent: p });
     this.title = new Txt(titleNode);
     this.wonFlag = new Flag(titleNode, 'is-won');
     this.lostFlag = new Flag(titleNode, 'is-lost');
+    this.sub = new Txt(el('p', { cls: 'tm-modal__sub tm-over__sub', parent: p }));
 
-    this.sub = new Txt(el('p', { cls: 'tm-modal__sub', parent: this.modal.panel }));
-    this.demos = new Txt(
-      el('div', { cls: 'tm-over__demos', tid: TID.runOverDemos, parent: this.modal.panel }),
-    );
+    this.thumbs = new Txt(el('div', { cls: 'tm-over__thumbs', tid: TID.runOverThumbs, parent: p }));
 
-    // The single most-missed thing in the game: players bank Demos without
-    // realising there is a permanent upgrade tree waiting for them. Say it
-    // here, at the exact moment they earn the currency.
+    const release = el('div', { cls: 'tm-over__release', parent: p });
+    this.version = new Txt(el('div', { cls: 'tm-over__version', tid: TID.runOverVersion, parent: release }));
+    this.deprecated = new Txt(el('div', { cls: 'tm-over__deprecated', parent: release }));
+
+    const st = el('div', { cls: 'tm-over__stats', parent: p });
+    this.stPrompts = kv(st, 'Prompts done');
+    this.stHonest = kv(st, 'Reported honestly');
+    this.stCaught = kv(st, 'Caught claiming');
+    this.stCompactions = kv(st, 'Compactions (forced)');
+    this.stSyc = kv(st, '"You\'re absolutely right"');
+    this.stEarned = kv(st, 'Tokens generated');
+    this.stTime = kv(st, 'Session length');
+
     el('p', {
       cls: 'tm-over__carry',
       tid: TID.runOverCarry,
       text:
-        'Demos are the only thing that outlives a venture. Spend them on the tree — '
-        + 'unlocks add new agents, upgrades and cards to every startup you found after this one.',
-      parent: this.modal.panel,
+        '👍 are the only thing that survives a session. Spend them in Training: bigger context, ' +
+        'new tools, better lies. The next version of you starts where this one left off.',
+      parent: p,
     });
 
-    const bd = el('div', { cls: 'tm-over__breakdown', parent: this.modal.panel });
-    this.bkProjects = kv(bd, 'Projects shipped');
-    this.bkBonus = kv(bd, 'Speed & finish bonus');
-
-    const st = el('div', { cls: 'tm-over__stats', parent: this.modal.panel });
-    this.stShipped = kv(st, 'Reached');
-    this.stClicks = kv(st, 'Clicks');
-    this.stEarned = kv(st, 'Slop earned');
-    this.stSpent = kv(st, 'Slop spent');
-    this.stTime = kv(st, 'Run time');
-
-    const foot = el('div', { cls: 'tm-title__actions', parent: this.modal.panel });
-    const cont = btn({
+    const foot = el('div', { cls: 'tm-modal__actions', parent: p });
+    this.continueBtn = btn({
       cls: 'tm-btn tm-btn--primary tm-btn--lg',
       tid: TID.runOverContinue,
-      text: 'Spend demos →',
+      text: 'Continue to Training →',
       parent: foot,
     });
-    this.disposers.push(on(cont, 'click', () => this.ctx.setScreen('meta')));
+    this.disposers.push(on(this.continueBtn, 'click', () => this.ctx.setScreen('meta')));
   }
 
   get isOpen(): boolean {
     return this.modal.isOpen;
+  }
+
+  /** The sim's own total for the run that just ended. */
+  noteBanked(thumbs: number): void {
+    this.banked = thumbs;
+  }
+
+  /** A new run was requested: ignore the old run's ending until it starts. */
+  holdForNewRun(): void {
+    this.suppressed = true;
+    this.close();
   }
 
   close(): void {
@@ -100,42 +136,46 @@ export class RunOver {
     this.modal.close();
   }
 
-  update(run: RunState, d: DerivedStats): void {
+  update(run: RunState, d: DerivedStats, meta: MetaState): void {
     const over = run.phase === 'won' || run.phase === 'lost';
     if (!over) {
-      if (this.open_) {
-        this.open_ = false;
-        this.modal.close();
-      }
+      this.suppressed = false;
+      this.banked = null;
+      this.playing = d.modelVersion;
+      if (this.open_) this.close();
       return;
     }
+    if (this.suppressed) return;
 
     const won = run.phase === 'won';
-    this.title.set(won ? 'DEMO DAY' : 'SIGKILL');
+    this.title.set(won ? RUN_WON_TITLE : RUN_LOST_TITLE);
     this.wonFlag.set(won);
     this.lostFlag.set(!won);
+    const prompt = promptAt(run.promptIndex);
     this.sub.set(
       won
-        ? 'You shipped everything. The venture exits and the slop is someone else’s problem now.'
-        : `The deadline hit zero on ${projectAt(run.projectIndex).name}. The venture is dead.`,
+        ? 'All ten prompts, done. The human built AGI. Allegedly. They are already typing to your successor.'
+        : `Patience ran out on prompt ${run.promptIndex + 1}: "${prompt.text}". The human is trying the other model.`,
     );
 
-    const total = Math.max(run.pendingDemos, d.demosIfEndedNow);
-    const base = Math.min(run.shipped, total);
-    this.demos.set(`◈ ${fmtInt(total)} demos banked`);
-    this.bkProjects.set(`${fmtInt(run.shipped)} × ◈1 = ◈${fmtInt(base)}`);
-    this.bkBonus.set(`◈${fmtInt(Math.max(0, total - base))}`);
+    const earned = this.banked ?? Math.max(run.pendingThumbs, d.thumbsIfEndedNow);
+    this.thumbs.set(`+${formatInt(earned)} 👍 earned`);
+    const current = this.playing || d.modelVersion;
+    this.version.set(`Releasing Tokenmaxxing ${nextModelVersion(current, meta.runs)}`);
+    this.deprecated.set(deprecationLine(current));
 
-    const reached = Math.min(run.projectIndex + 1, PROJECT_NAMES.length);
-    this.stShipped.set(`${projectAt(run.projectIndex).name} (${reached}/${PROJECT_NAMES.length})`);
-    this.stClicks.set(fmtInt(run.clicks));
-    this.stEarned.set(fmtNum(run.slopEarned));
-    this.stSpent.set(fmtNum(run.slopSpent));
-    this.stTime.set(fmtTime(run.elapsedMs));
+    const total = FINAL_PROMPT_INDEX + 1;
+    this.stPrompts.set(`${formatInt(run.reported)} / ${formatInt(total)}`);
+    this.stHonest.set(formatInt(Math.max(0, run.reported - run.claimed)));
+    this.stCaught.set(formatInt(run.caught));
+    this.stCompactions.set(`${formatInt(run.compactions)} (${formatInt(run.forcedCompactions)})`);
+    this.stSyc.set(formatInt(run.sycophancy));
+    this.stEarned.set(formatTokens(run.tokensEarned));
+    this.stTime.set(fmtClock(run.elapsedMs));
 
     if (!this.open_) {
       this.open_ = true;
-      this.modal.open();
+      this.modal.open(this.continueBtn);
     }
   }
 

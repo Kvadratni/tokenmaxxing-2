@@ -1,32 +1,46 @@
 /*
- * Tokenmaxxing palette.
+ * Tokenmaxxing 2 palette (concept/STYLE.md).
  *
- * These values MUST stay byte-identical to `src/render/palette.ts` (owned by the
- * RENDER agent). This file deliberately does NOT import from TypeScript so the
- * DOM chrome has zero coupling to the renderer module graph.
+ * Near-black slate, terminal green as the hero accent, amber for highlights
+ * and warnings, muted red for danger and cost, purple and sky blue for
+ * pickups. The named accents track `src/render/palette.ts` (owned by STAGE);
+ * this file deliberately does not import from TypeScript, so the DOM chrome
+ * has no coupling to the renderer's module graph.
  */
 
 :root {
   /* backgrounds, darkest -> lightest */
-  --bg0: #14161a;
-  --bg1: #1e2127;
-  --bg2: #252a31;
-  --bg3: #2f353e;
-  --line: #3c434e;
+  --bg0: #14171c;
+  --bg1: #1a1e25;
+  --bg2: #222730;
+  --bg3: #2a2f38;
+  --line: #3a414d;
+  --line2: #4b5361;
 
   /* foregrounds, dimmest -> brightest */
   --fg2: #6b7482;
   --fg1: #9aa4b2;
   --fg0: #d7dee8;
+  --white: #f2f6fb;
 
   /* accents */
-  --green: #4ec94e;
-  --green2: #2f8f3a;
-  --amber: #e8b34a;
-  --red: #e5484d;
-  --blue: #4a9de8;
+  --green: #4ade5a;
+  --green2: #2c9a3c;
+  --green3: #173d20;
+  --amber: #f2b33d;
+  --amber2: #9c6d1c;
+  --red: #e0524a;
+  --red2: #7a2a26;
+  --blue: #4aa3f0;
+  --blue2: #1f4f7a;
   --purple: #9b6bd6;
-  --white: #f2f6fb;
+
+  /* the same accents as channels, for translucent washes */
+  --green-rgb: 74, 222, 90;
+  --amber-rgb: 242, 179, 61;
+  --red-rgb: 224, 82, 74;
+  --blue-rgb: 74, 163, 240;
+  --bg0-rgb: 20, 23, 28;
 
   /* derived, UI-only */
   --rarity-common: var(--fg1);
@@ -34,10 +48,9 @@
   --rarity-rare: var(--purple);
 
   /*
-   * Integer pixel scale. This is the boot default; src/ui/scale.ts overrides it
-   * on the `.tm-ui` element itself. Type sizes derived from it MUST be declared
-   * on `.tm-ui` too (custom properties substitute at their declaring element),
-   * which is why they live in ui.css.
+   * Boot defaults. src/ui/scale.ts overrides both on `.tm-ui` itself: `--px`
+   * is the stage scale, `--g` one glyph pixel of the pixel font.
    */
   --px: 3px;
+  --g: 1px;
 }

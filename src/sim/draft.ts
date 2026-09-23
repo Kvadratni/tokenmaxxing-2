@@ -1,64 +1,74 @@
 /**
- * Draft offer generation.
+ * Draft offers: "The human is prompt engineering".
  *
  * Rules enforced here:
- *  - never offer a card already owned this run
- *  - never offer a card whose exclusiveGroup is already claimed by an owned card
- *  - never offer two cards from the same exclusiveGroup in one offer
- *  - respect minProjectIndex against the project about to be played
+ *  - only cards the save has unlocked, and never one already held;
+ *  - an exclusiveGroup claimed this run blocks every other card of the group,
+ *    even after compaction drops the claimant (the contract says the two can
+ *    never both appear in one run);
+ *  - never two cards from one exclusiveGroup in the same offer;
+ *  - respect minPromptIndex against the prompt the draft leads into.
  */
 import type { CardDef, CardId } from './types.ts';
 import { CARDS, CARD_BY_ID } from './content.ts';
 import type { Rng } from './rng.ts';
 
-/** Relative pick weight by rarity — rare cards stay rare. */
+/** Relative pick weight by rarity: rare cards stay rare. */
 export const RARITY_WEIGHT: Readonly<Record<CardDef['rarity'], number>> = {
   common: 10,
   uncommon: 5,
   rare: 2,
 };
 
-/** exclusiveGroups already locked in by the cards the player owns. */
-export function claimedGroups(ownedCards: readonly CardId[]): Set<string> {
-  const groups = new Set<string>();
-  for (const id of ownedCards) {
-    const def = CARD_BY_ID[id];
-    if (def?.exclusiveGroup) groups.add(def.exclusiveGroup);
+/** exclusiveGroup -> the card that claimed it this run. */
+export function claimedGroups(cards: readonly CardId[]): Map<string, CardId> {
+  const groups = new Map<string, CardId>();
+  for (const id of cards) {
+    const group = CARD_BY_ID[id]?.exclusiveGroup;
+    if (group && !groups.has(group)) groups.set(group, id);
   }
   return groups;
 }
 
 /**
  * Every card legally offerable right now.
- * `projectIndex` is the index of the project the draft leads into.
+ *
+ * @param held      cards currently in effect
+ * @param promptIndex the prompt the draft leads into
+ * @param unlocked  cards the save has unlocked; omit to allow the catalogue
+ * @param history   every card picked this run, including compacted-away ones
  */
 export function draftPool(
-  ownedCards: readonly CardId[],
-  projectIndex: number,
-  /** Cards the save has unlocked. Omit to allow the whole catalogue. */
+  held: readonly CardId[],
+  promptIndex: number,
   unlocked?: ReadonlySet<string>,
+  history: readonly CardId[] = [],
 ): CardDef[] {
-  const owned = new Set(ownedCards);
-  const blocked = claimedGroups(ownedCards);
-  return CARDS.filter(
-    (c) =>
-      !owned.has(c.id) &&
-      (unlocked === undefined || unlocked.has(c.id)) &&
-      (c.minProjectIndex ?? 0) <= projectIndex &&
-      !(c.exclusiveGroup && blocked.has(c.exclusiveGroup)),
-  );
+  const holding = new Set(held);
+  const claimed = claimedGroups([...held, ...history]);
+  return CARDS.filter((c) => {
+    if (holding.has(c.id)) return false;
+    if (unlocked !== undefined && !unlocked.has(c.id)) return false;
+    if ((c.minPromptIndex ?? 0) > promptIndex) return false;
+    if (c.exclusiveGroup) {
+      const owner = claimed.get(c.exclusiveGroup);
+      if (owner !== undefined && owner !== c.id) return false;
+    }
+    return true;
+  });
 }
 
 /** Weighted sample without replacement, group-exclusive within the offer. */
 export function generateOffer(
   rng: Rng,
-  ownedCards: readonly CardId[],
-  projectIndex: number,
+  held: readonly CardId[],
+  promptIndex: number,
   size: number,
   unlocked?: ReadonlySet<string>,
+  history: readonly CardId[] = [],
 ): CardId[] {
   const want = Math.max(0, Math.min(CARDS.length, Math.floor(size)));
-  let pool = draftPool(ownedCards, projectIndex, unlocked);
+  let pool = draftPool(held, promptIndex, unlocked, history);
   const offer: CardId[] = [];
 
   while (offer.length < want && pool.length > 0) {

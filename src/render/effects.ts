@@ -1,11 +1,12 @@
 /**
  * Full-frame effects: screenshake, colour flashes, the incident glitch, the
- * deadline vignette and the win / loss washes.
+ * low-patience vignette and the win / loss washes.
  *
  * Every motion-heavy effect here is gated on `Settings.reducedMotion` and
  * `Settings.screenShake`. With reduced motion on, shake and glitch are disabled
  * outright — the game stays fully readable, it just stops moving.
  */
+import { ACHIEVEMENT_BY_ID } from '../sim/content.ts';
 import type { Settings } from '../sim/types.ts';
 import { createSurface } from './canvas.ts';
 import { H, W } from './layout.ts';
@@ -181,19 +182,20 @@ export class Effects {
   }
 
   /**
-   * Red deadline vignette. Ramps in below 25% of the deadline and pulses on the
-   * beat once under `warnSeconds`.
+   * Red vignette as the human's patience runs out. Ramps in below 25% and
+   * pulses on the beat once under `warnSeconds`.
    */
   drawVignette(
     ctx: CanvasRenderingContext2D,
-    deadlineProgress: number,
+    patienceProgress: number,
     secondsLeft: number,
     timeS: number,
+    warnSeconds = 10,
   ): number {
-    const danger = Math.max(0, Math.min(1, (0.25 - deadlineProgress) / 0.25));
+    const danger = Math.max(0, Math.min(1, (0.25 - patienceProgress) / 0.25));
     if (danger <= 0) return 0;
     let a = 0.22 + danger * 0.5;
-    if (secondsLeft < 10) {
+    if (secondsLeft < warnSeconds) {
       const beat = this.settings.reducedMotion ? 0.5 : Math.abs(Math.sin(timeS * Math.PI * 1.6));
       a += beat * 0.28;
     }
@@ -283,56 +285,48 @@ export class Effects {
     return ops;
   }
 
-  /** SIGKILL blue-screen on loss, golden wash on win. */
+  /**
+   * The run is over. Lost: the human switched models, and this version is
+   * deprecated. Won: shipped. The words are the achievements' own names.
+   */
   drawWash(ctx: CanvasRenderingContext2D, timeS: number): number {
     if (this.washKind === 'none' || this.washT <= 0) return 0;
     let ops = 0;
     const t = this.washT;
     const prev = ctx.globalAlpha;
     if (this.washKind === 'lose') {
-      ctx.globalAlpha = 0.82 * t;
-      ctx.fillStyle = '#1b3a6b';
+      ctx.globalAlpha = 0.8 * t;
+      ctx.fillStyle = PALETTE.bg0;
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
       ops++;
-      const boxW = 150;
-      const boxH = 46;
+      const title = (ACHIEVEMENT_BY_ID['deprecated']?.name ?? 'Deprecated').toUpperCase();
+      const boxW = 180;
+      const boxH = 44;
       const bx = Math.round((W - boxW) / 2);
-      const by = Math.round((H - boxH) / 2) - 6;
-      ctx.fillStyle = PALETTE.bg0;
+      const by = Math.round((H - boxH) / 2) - 8;
+      ctx.fillStyle = PALETTE.bg1;
       ctx.fillRect(bx, by, boxW, boxH);
-      ctx.fillStyle = PALETTE.blue;
+      ctx.fillStyle = PALETTE.fg2;
       ctx.fillRect(bx, by, boxW, 1);
       ctx.fillRect(bx, by + boxH - 1, boxW, 1);
       ctx.fillRect(bx, by, 1, boxH);
       ctx.fillRect(bx + boxW - 1, by, 1, boxH);
       ops += 5;
-      drawText(ctx, 'SIGKILL', W / 2, by + 10, PALETTE.white, {
-        scale: 4,
-        align: 'center',
-        shadow: PALETTE.red,
-      });
-      drawText(ctx, 'DEADLINE MISSED', W / 2, by + 34, PALETTE.fg1, { scale: 1, align: 'center' });
+      drawText(ctx, title, W / 2, by + 9, PALETTE.fg0, { scale: 3, align: 'center', shadow: PALETTE.bg0 });
+      // DESIGN.md's own words for a lost run ("the human switches models").
+      drawText(ctx, 'THE HUMAN SWITCHED MODELS', W / 2, by + 31, PALETTE.fg2, { scale: 1, align: 'center' });
       ops += 2;
     } else {
       const pulse = 0.5 + 0.5 * Math.sin(timeS * 3);
-      ctx.globalAlpha = (0.2 + pulse * 0.12) * t;
-      ctx.fillStyle = PALETTE.amber;
+      ctx.globalAlpha = (0.18 + pulse * 0.1) * t;
+      ctx.fillStyle = PALETTE.green;
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
       ops++;
-      // Dark shadow: white-on-gold has no contrast without it.
-      drawText(ctx, 'DEMO DAY', W / 2, H / 2 - 16, PALETTE.white, {
-        scale: 4,
-        align: 'center',
-        shadow: PALETTE.bg0,
-      });
-      drawText(ctx, 'YOU SHIPPED EVERYTHING', W / 2, H / 2 + 12, PALETTE.white, {
-        scale: 1,
-        align: 'center',
-        shadow: PALETTE.bg0,
-      });
-      ops += 2;
+      const title = (ACHIEVEMENT_BY_ID['shipped_to_prod']?.name ?? 'Shipped To Prod').toUpperCase();
+      drawText(ctx, title, W / 2, H / 2 - 20, PALETTE.white, { scale: 3, align: 'center', shadow: PALETTE.bg0 });
+      ops++;
     }
     ctx.globalAlpha = prev;
     return ops;

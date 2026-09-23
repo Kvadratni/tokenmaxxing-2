@@ -38,6 +38,15 @@ export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+/**
+ * Clamp an amount into 0..1 where both ends mean something: NaN reads as 0,
+ * but an infinite reading sits at the end it points to. (`clamp` sends every
+ * non-finite value to `lo`, which is right for volumes, wrong for "how full".)
+ */
+export function saturate(v: number): number {
+  return v >= 1 ? 1 : v > 0 ? v : 0;
+}
+
 /** MIDI note number -> Hz. */
 export function mtof(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
@@ -64,7 +73,7 @@ export interface VoiceSlot {
  * Hard cap on simultaneous voices.
  *
  * Policy when full: reject the *incoming* sound if it is low priority, so a
- * mashed click can never cut off a ship fanfare. High-priority sounds may steal
+ * mashed click can never cut off a report fanfare. High-priority sounds may steal
  * a single low-priority slot; they never exceed the cap.
  */
 export class VoicePool {

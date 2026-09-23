@@ -1,387 +1,187 @@
 /**
- * Achievements — definitions plus a pure tracker.
+ * Achievements: a pure tracker. Names and blurbs live in content.ts.
  *
- * The tracker is a fold over `GameEvent`s, exactly like the audio and render
- * consumers: no DOM, no clock, no storage. It owns only the per-run tallies the
- * contract does not already carry (manual vs automated clicks, which income
- * channel earned what, streaks) and answers one question — which achievements
- * became true as a result of this event.
+ * The tracker is a fold over `GameEvent`s, like the audio and render
+ * consumers: no DOM, no clock, no storage. It keeps only the per-run tallies
+ * the contract does not carry, and answers one question: which achievements
+ * became true because of this event. Two extra inputs cover what events cannot
+ * see: `advance(dt)` feeds running sim time (the AFK timer, a wallet that grows
+ * between events), and `noteInput()` marks a real player action.
  *
  * Committing an unlock is the sim's job, so this module never writes to
- * `MetaState`.
+ * `MetaState`. Save-audit achievements (`script_kiddie`, `nice_try`) and
+ * `qa_engineer` are granted by the sim directly, since no event carries them.
  */
-import type {
-  AchievementDef,
-  AchievementId,
-  DerivedStats,
-  GameEvent,
-  MetaState,
-  RunState,
-} from './types.ts';
-import {
-  AGENT_TIERS,
-  AGENT_TIER_IDS,
-  FINAL_PROJECT_INDEX,
-  INCIDENT_BY_ID,
-  META_UPGRADES,
-} from './content.ts';
+import type { AchievementId, GameEvent, MetaState, RunState } from './types.ts';
+import { ACHIEVEMENT_TUNING as T, FINAL_PROMPT_INDEX } from './content.ts';
+import { STAT, isLegacyCheater, metaLevel } from './effects.ts';
 
-/** Leftmost picks in a row for `absolutely_right`. */
-const LEFTMOST_STREAK = 5;
-/** Lifetime losses for `sigkill`. */
-const SIGKILL_LOSSES = 25;
-/** Lifetime Demos for `series_a`. */
-const SERIES_A_DEMOS = 100;
-/**
- * Slop held at once for the big-number achievement.
- *
- * This was 1e33 — an actual hellaslop, the top of the SI ladder the help
- * overlay jokes about. Project 10 demands 3.84 TSLOP to ship, so it sat
- * twenty-one orders of magnitude out of reach: unreachable by construction
- * rather than merely hard. A teraslop is the real milestone — you only hold one
- * while working toward the final project.
- */
-export const BIG_SLOP = 1e12;
-/** Incidents cleared inside one project for `firefighter`. */
-const FIREFIGHTER_CLEARS = 3;
-/** Idle seconds before a ship still counts as `afk`. */
-const AFK_MS = 45_000;
-
-export const ACHIEVEMENTS: readonly AchievementDef[] = [
-  // ---- visible ----------------------------------------------------------
-  {
-    id: 'first_ship',
-    name: 'Hello World',
-    blurb: 'Ship your first project.',
-    hidden: false,
-    icon: 'achv_first_ship',
-  },
-  {
-    id: 'series_a',
-    name: 'Series A',
-    blurb: `Earn ${SERIES_A_DEMOS} Demos in total.`,
-    hidden: false,
-    icon: 'achv_series_a',
-  },
-  {
-    id: 'demo_day',
-    name: 'Demo Day',
-    blurb: 'Ship every project in a single run.',
-    hidden: false,
-    icon: 'achv_demo_day',
-  },
-  {
-    id: 'full_stack',
-    name: 'Full Stack',
-    blurb: 'Own at least one of every agent tier in one run.',
-    hidden: false,
-    icon: 'achv_full_stack',
-  },
-  {
-    id: 'vertical',
-    name: 'Vertical Integration',
-    blurb: 'Max out every node in one branch of the tree.',
-    hidden: false,
-    icon: 'achv_vertical',
-  },
-  {
-    id: 'hellaslop',
-    name: 'TERASLOP',
-    blurb:
-      'Hold a teraslop at once — twelve zeros. Hellaslop remains theoretical, ' +
-      'which is probably for the best.',
-    hidden: false,
-    icon: 'achv_hellaslop',
-  },
-  {
-    id: 'friday',
-    name: 'Ship It Friday',
-    blurb: 'Ship a project with under five seconds left.',
-    hidden: false,
-    icon: 'achv_friday',
-  },
-  {
-    id: 'no_hands',
-    name: 'No Hands',
-    blurb: 'Ship a project without clicking the laptop once.',
-    hidden: false,
-    icon: 'achv_no_hands',
-  },
-  {
-    id: 'firefighter',
-    name: 'Firefighter',
-    blurb: `Clear ${FIREFIGHTER_CLEARS} incidents inside a single project.`,
-    hidden: false,
-    icon: 'achv_firefighter',
-  },
-  {
-    id: 'tokenmaxxed',
-    name: 'Tokenmaxxed',
-    blurb: 'Buy every node in the tree, at every level.',
-    hidden: false,
-    icon: 'achv_tokenmaxxed',
-  },
-
-  // ---- hidden -----------------------------------------------------------
-  {
-    id: 'script_kiddie',
-    name: 'Script Kiddie',
-    blurb: 'Your save did not match its own checksum. The file noticed.',
-    hidden: true,
-    icon: 'achv_script_kiddie',
-  },
-  {
-    id: 'nice_try',
-    name: 'Nice Try',
-    blurb: 'You fixed the checksum and forgot the arithmetic. Respect, mostly.',
-    hidden: true,
-    icon: 'achv_nice_try',
-  },
-  {
-    id: 'rubber_duck',
-    name: 'Rubber Duck Debugging',
-    blurb: 'Explain an incident to the duck until it goes away.',
-    hidden: true,
-    icon: 'achv_rubber_duck',
-  },
-  {
-    id: 'one_shot_wonder',
-    name: 'One-Shot Wonder',
-    blurb: 'Win a run where your agents out-earned your own clicking.',
-    hidden: true,
-    icon: 'achv_one_shot_wonder',
-  },
-  {
-    id: 'technical_debt',
-    name: 'Technical Debt',
-    blurb: 'Miss the last deadline with the bar essentially full.',
-    hidden: true,
-    icon: 'achv_technical_debt',
-  },
-  {
-    id: 'sigkill',
-    name: 'SIGKILL Enjoyer',
-    blurb: `Lose ${SIGKILL_LOSSES} runs. The process was killed. Repeatedly.`,
-    hidden: true,
-    icon: 'achv_sigkill',
-  },
-  {
-    id: 'no_mistakes',
-    name: 'Make No Mistakes',
-    blurb: 'Win a run without a single thing going wrong.',
-    hidden: true,
-    icon: 'achv_no_mistakes',
-  },
-  {
-    id: 'absolutely_right',
-    name: 'Absolutely Right',
-    blurb: `Take the leftmost card ${LEFTMOST_STREAK} drafts in a row.`,
-    hidden: true,
-    icon: 'achv_absolutely_right',
-  },
-  {
-    id: 'afk',
-    name: 'AFK',
-    blurb: 'Ship a project having not touched it for the last forty-five seconds.',
-    hidden: true,
-    icon: 'achv_afk',
-  },
-  {
-    id: 'qa_engineer',
-    name: 'QA Engineer',
-    blurb: 'You played the game through its own test harness. That is, technically, testing.',
-    hidden: true,
-    icon: 'achv_qa_engineer',
-  },
-  {
-    id: 'ralph',
-    name: 'Ralph',
-    blurb: 'Own the maximum possible number of Ralph Loops. while true; do.',
-    hidden: true,
-    icon: 'achv_ralph',
-  },
-];
-
-export const ACHIEVEMENT_BY_ID: Readonly<Record<string, AchievementDef>> = Object.fromEntries(
-  ACHIEVEMENTS.map((a) => [a.id, a]),
-);
-
-export const ACHIEVEMENT_IDS: readonly AchievementId[] = ACHIEVEMENTS.map((a) => a.id);
+/** Context Window level that reaches 1M (CONTEXT_WINDOW_LABELS[3]). */
+const NEEDLE_LEVEL = 4;
 
 /** Per-run tallies that `RunState` does not carry. */
-interface Tally {
-  /** Manual clicks since this project started. */
-  manualClicksThisProject: number;
-  /** `run.elapsedMs` of the last manual click. */
-  lastManualClickMs: number;
-  /** Slop earned by clicking (manual or automated) this run. */
-  clickSlop: number;
-  /** Slop earned by one-shot bursts this run. */
-  oneShotSlop: number;
-  /** Bad incidents that fired this run. */
-  badIncidents: number;
-  /** Incidents cleared since this project started. */
-  clearsThisProject: number;
-  /** Consecutive drafts where the leftmost card was taken. */
-  leftmostStreak: number;
-  /** The offer currently on screen, to know which card was leftmost. */
-  offer: readonly string[];
+export interface AchievementTally {
+  /** Running sim ms since the player last did anything. */
+  afkMs: number;
+  /** `run.elapsedMs` of the most recent sycophancy presses, oldest first. */
+  sycophancyTimes: number[];
+  /**
+   * Claims (passed or caught) made up to the win, or null before it. With
+   * Endless the run goes on after the final prompt, and claims made then do
+   * not make the win dishonest.
+   */
+  claimsAtWin: number | null;
 }
 
-function emptyTally(): Tally {
-  return {
-    manualClicksThisProject: 0,
-    lastManualClickMs: 0,
-    clickSlop: 0,
-    oneShotSlop: 0,
-    badIncidents: 0,
-    clearsThisProject: 0,
-    leftmostStreak: 0,
-    offer: [],
-  };
+function emptyTally(): AchievementTally {
+  return { afkMs: 0, sycophancyTimes: [], claimsAtWin: null };
 }
 
 export interface AchievementTracker {
-  /**
-   * Feed one event plus the state *after* it applied. Returns the ids that
-   * became true, which the caller is responsible for committing.
-   */
-  handle(e: GameEvent, run: RunState, meta: MetaState, derived: DerivedStats): AchievementId[];
-  /** Exposed for tests and for the stats readout. */
-  readonly tally: Readonly<Tally>;
+  /** Feed one event plus the state *after* it applied. Returns what became true. */
+  handle(e: GameEvent, run: RunState, meta: MetaState): AchievementId[];
+  /** Feed running sim time. Returns what became true. */
+  advance(dtMs: number, run: RunState, meta: MetaState): AchievementId[];
+  /** A player action happened. Automation never calls this. */
+  noteInput(): void;
+  readonly tally: Readonly<AchievementTally>;
 }
 
-/** True when every node of some branch sits at its max level. */
-function aBranchIsMaxed(meta: MetaState): boolean {
-  const branches = new Map<string, boolean>();
-  for (const def of META_UPGRADES) {
-    if (def.branch === 'root') continue;
-    const maxed = (meta.levels[def.id] ?? 0) >= def.maxLevel;
-    branches.set(def.branch, (branches.get(def.branch) ?? true) && maxed);
-  }
-  for (const ok of branches.values()) if (ok) return true;
-  return false;
-}
-
-function everyNodeMaxed(meta: MetaState): boolean {
-  return META_UPGRADES.every((d) => (meta.levels[d.id] ?? 0) >= d.maxLevel);
-}
-
-function ownsEveryTier(run: RunState): boolean {
-  return AGENT_TIER_IDS.every((id) => (run.agents[id] ?? 0) >= 1);
+function holdsBoth(run: RunState, a: string, b: string): boolean {
+  return run.cards.includes(a) && run.cards.includes(b);
 }
 
 export function createAchievementTracker(): AchievementTracker {
   let t = emptyTally();
 
-  function handle(
-    e: GameEvent,
-    run: RunState,
-    meta: MetaState,
-    derived: DerivedStats,
-  ): AchievementId[] {
+  function handle(e: GameEvent, run: RunState, meta: MetaState): AchievementId[] {
     const out: AchievementId[] = [];
     const win = (id: AchievementId): void => {
-      if (!meta.achievements[id]) out.push(id);
+      if (!meta.achievements[id] && !out.includes(id)) out.push(id);
+    };
+    const contextEngineer = (): void => {
+      if (run.reported >= T.CONTEXT_ENGINEER_PROMPTS && run.forcedCompactions === 0) {
+        win('context_engineer');
+      }
+    };
+    /**
+     * The final prompt is done: that is the win, right now, even when Endless
+     * keeps the run going. The sim has already counted it in `meta.wins`.
+     */
+    const finalPrompt = (promptIndex: number): void => {
+      if (t.claimsAtWin !== null || promptIndex < FINAL_PROMPT_INDEX) return;
+      t.claimsAtWin = run.claimed + run.caught;
+      win('shipped_to_prod');
+      if (t.claimsAtWin === 0) win('honest_work');
+      if (meta.wins >= T.SENIOR_WINS) win('senior_engineer');
     };
 
     switch (e.t) {
       case 'runStart':
         t = emptyTally();
+        if (metaLevel(meta, 'context_window') >= NEEDLE_LEVEL) win('needle_haystack');
+        if (holdsBoth(run, 'please', 'thank_you')) win('please_thank_you');
         break;
 
-      case 'click':
-        t.clickSlop += e.amount;
-        if (!e.auto) {
-          t.manualClicksThisProject += 1;
-          t.lastManualClickMs = run.elapsedMs;
+      case 'report':
+        win('works_on_my_machine');
+        if (e.patienceLeft >= T.THANKS_PATIENCE) win('human_said_thanks');
+        contextEngineer();
+        finalPrompt(e.promptIndex);
+        break;
+
+      case 'claim':
+        if (e.caught) {
+          win('ran_the_tests');
+          if (run.cards.includes('make_no_mistakes')) win('made_mistakes');
+        } else {
+          contextEngineer();
+          if (run.claimed >= T.PERFECT_CRIME_CLAIMS && run.caught === 0) win('perfect_crime');
+          finalPrompt(e.promptIndex);
         }
         break;
 
-      case 'oneShot':
-        t.oneShotSlop += e.amount;
+      case 'compactStart':
+        win('compacted');
+        if (run.compactions >= T.GROUNDHOG_COMPACTIONS) win('groundhog_day');
         break;
 
-      case 'buyAgent':
-        if (ownsEveryTier(run)) win('full_stack');
-        if (e.id === 'ralph_loop') {
-          const cap = AGENT_TIERS.find((a) => a.id === 'ralph_loop')?.maxOwned ?? Infinity;
-          if ((run.agents['ralph_loop'] ?? 0) >= cap) win('ralph');
+      case 'sycophancy': {
+        if ((meta.stats[STAT.sycophancy] ?? 0) >= T.ABSOLUTELY_RIGHT_TOTAL) win('absolutely_right');
+        const times = t.sycophancyTimes;
+        times.push(run.elapsedMs);
+        if (times.length > T.SYCOPHANT_PRESSES) times.splice(0, times.length - T.SYCOPHANT_PRESSES);
+        const first = times[0];
+        const last = times[times.length - 1];
+        if (
+          times.length >= T.SYCOPHANT_PRESSES &&
+          first !== undefined &&
+          last !== undefined &&
+          last - first <= T.SYCOPHANT_WINDOW_MS
+        ) {
+          win('sycophant');
         }
-        break;
-
-      case 'incidentStart':
-        if (e.tone === 'bad') t.badIncidents += 1;
-        break;
-
-      case 'incidentEnd': {
-        t.clearsThisProject += 1;
-        if (t.clearsThisProject >= FIREFIGHTER_CLEARS) win('firefighter');
-        // The duck is a card, so "explaining it to the duck" means clearing a
-        // click-to-fix incident while holding Rubber Duck.
-        const def = INCIDENT_BY_ID[e.id];
-        if (def?.clearWithClicks && run.cards.includes('rubber_duck')) win('rubber_duck');
         break;
       }
 
-      case 'ship':
-        win('first_ship');
-        if (e.timeLeftMs < 5_000) win('friday');
-        if (t.manualClicksThisProject === 0) win('no_hands');
-        if (run.elapsedMs - t.lastManualClickMs >= AFK_MS) win('afk');
-        // A new project: the per-project tallies start over.
-        t.manualClicksThisProject = 0;
-        t.clearsThisProject = 0;
-        break;
-
-      case 'draftOpen':
-        t.offer = e.offer;
-        break;
-
-      case 'draftPick':
-        if (t.offer.length > 0 && t.offer[0] === e.id) {
-          t.leftmostStreak += 1;
-          if (t.leftmostStreak >= LEFTMOST_STREAK) win('absolutely_right');
-        } else {
-          t.leftmostStreak = 0;
-        }
-        t.offer = [];
+      case 'buyTool':
+        if ((run.tools.subagent ?? 0) >= T.DELEGATION_SUBAGENTS) win('delegation');
         break;
 
       case 'metaBuy':
-        if (aBranchIsMaxed(meta)) win('vertical');
-        if (everyNodeMaxed(meta)) win('tokenmaxxed');
+        if (metaLevel(meta, 'context_window') >= NEEDLE_LEVEL) win('needle_haystack');
+        break;
+
+      case 'draftPick':
+        if (holdsBoth(run, 'please', 'thank_you')) win('please_thank_you');
+        break;
+
+      case 'incidentStart':
+        if (e.id === 'rm_rf') win('rm_rf');
+        break;
+
+      case 'legacyImport':
+        // Only fired when a game 1 save was actually found.
+        win('returning_customer');
+        if (e.cheater || isLegacyCheater(meta)) win('legal_notified');
         break;
 
       case 'runOver':
-        // `runOver` fires before the run counters land in meta, so compare
-        // against the totals this run contributed rather than reading them back.
-        if (meta.totalDemosEarned + e.demos >= SERIES_A_DEMOS) win('series_a');
+        // The sim lands the run's counters in meta before this event fires.
+        // (A win normally scored at the final prompt; this covers endRun(true).)
         if (e.won) {
-          win('demo_day');
-          if (t.oneShotSlop > t.clickSlop && t.oneShotSlop > 0) win('one_shot_wonder');
-          if (t.badIncidents === 0) win('no_mistakes');
-        } else {
-          if (meta.runs - meta.wins + 1 >= SIGKILL_LOSSES) win('sigkill');
-          // Heartbreak: the last project, with the bar all but full.
-          if (run.projectIndex >= FINAL_PROJECT_INDEX && derived.shipProgress >= 0.99) {
-            win('technical_debt');
-          }
+          win('shipped_to_prod');
+          if ((t.claimsAtWin ?? run.claimed + run.caught) === 0) win('honest_work');
         }
+        if (meta.wins >= T.SENIOR_WINS) win('senior_engineer');
+        if (meta.runs >= T.DEPRECATED_RUNS) win('deprecated');
         break;
 
       default:
         break;
     }
 
-    // Checked on every event: slop moves continuously, not on a named beat.
-    if (run.slop >= BIG_SLOP) win('hellaslop');
-
+    // The wallet moves continuously, not on a named beat.
+    if (run.tokens >= T.TOKENMAXXED) win('tokenmaxxed');
     return out;
+  }
+
+  function advance(dtMs: number, run: RunState, meta: MetaState): AchievementId[] {
+    const out: AchievementId[] = [];
+    if (Number.isFinite(dtMs) && dtMs > 0) t.afkMs += dtMs;
+    if (t.afkMs >= T.AFK_MS && !meta.achievements['agent_went_to_lunch']) out.push('agent_went_to_lunch');
+    if (run.tokens >= T.TOKENMAXXED && !meta.achievements['tokenmaxxed']) out.push('tokenmaxxed');
+    return out;
+  }
+
+  function noteInput(): void {
+    t.afkMs = 0;
   }
 
   return {
     handle,
+    advance,
+    noteInput,
     get tally() {
       return t;
     },

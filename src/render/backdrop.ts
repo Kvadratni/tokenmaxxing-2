@@ -1,24 +1,24 @@
 /**
- * Procedural scene backdrops.
+ * Procedural room backdrops: Tokenmaxxing 1's five scenes, painted in code.
  *
- * These are static, so each one is painted once into an offscreen 320x180
- * surface and blitted afterwards — the hot loop never redraws scene geometry.
- * Where no offscreen surface is available (headless test environments) we fall
- * back to immediate-mode painting, which is slow but correct.
+ * The shipped rooms come from the atlas (tools/art/rooms.mjs, game 1's own
+ * scene art dimmed behind the glass). These are the stand-ins for when the
+ * atlas is missing, so the human's room is still recognisable with no art.
+ * Each is painted once into an offscreen 320x180 surface and blitted after;
+ * where no offscreen surface exists (headless tests) it paints immediately.
  */
 import type { SceneKey } from '../sim/types.ts';
 import { createSurface } from './canvas.ts';
-import {
-  DESK_FACE_BOTTOM,
-  DESK_LEFT,
-  DESK_RIGHT,
-  DESK_SURFACE_BOTTOM,
-  DESK_TOP,
-  FLOOR_TOP,
-  H,
-  W,
-} from './layout.ts';
+import { H, W } from './layout.ts';
 import { PALETTE, mix, shade } from './palette.ts';
+
+// The human's desk, in the room behind the glass (game 1's layout).
+const DESK_TOP = 116;
+const DESK_SURFACE_BOTTOM = 124;
+const DESK_FACE_BOTTOM = 130;
+const FLOOR_TOP = 152;
+const DESK_LEFT = 18;
+const DESK_RIGHT = 302;
 
 type Ctx = CanvasRenderingContext2D;
 

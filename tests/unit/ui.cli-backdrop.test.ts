@@ -1,9 +1,10 @@
 /**
- * The CLI backdrop is decorative, so the properties worth pinning are all
+ * The CLI backdrop is decorative, so the properties worth pinning are mostly
  * negative ones: it must not be reachable, must not grow without bound, must
  * not leave a timer running, and must not animate when the player asked for
- * stillness. Determinism and the line budget are asserted against the pure
- * script generator, which needs no DOM.
+ * stillness. Determinism, the line budget and the jokes themselves (it is the
+ * agent's side of the glass now) are asserted against the pure script
+ * generator, which needs no DOM.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -264,40 +265,72 @@ describe('cli backdrop — determinism', () => {
     expect(second).not.toEqual(first);
   });
 
-  it('hits every task and every line kind over a long run', () => {
+  it('hits every line kind over a long run', () => {
     const next = createCliScript(3);
     const kinds = new Set<string>();
-    const prompts = new Set<string>();
-    const notes = new Set<string>();
-    for (let i = 0; i < 40_000; i++) {
-      const line = next();
-      kinds.add(line.kind);
-      if (line.kind === 'prompt') prompts.add(line.text);
-      if (line.kind === 'note') notes.add(line.text.trim());
-    }
-    expect(Array.from(kinds).sort()).toEqual([
-      'code',
-      'fail',
-      'gap',
-      'note',
-      'ok',
-      'prompt',
-      'tool',
-      'warn',
-    ]);
+    for (let i = 0; i < 20_000; i++) kinds.add(next().kind);
+    expect(Array.from(kinds).sort()).toEqual(['code', 'fail', 'gap', 'note', 'ok', 'prompt', 'tool', 'warn']);
+  });
+});
 
-    // Every task prompt, once the appended incantation is stripped back off.
-    const bare = new Set(Array.from(prompts, (p) => p.split('. ')[0] ?? p));
-    expect(bare.size, 'a task or interlude prompt became unreachable').toBeGreaterThanOrEqual(13);
+describe("cli backdrop — the agent's side of the glass", () => {
+  /** Every line of a long session, flattened. */
+  const session = (() => {
+    const next = createCliScript(0x5c0f);
+    const out: CliLine[] = [];
+    for (let i = 0; i < 40_000; i++) out.push(next());
+    return out;
+  })();
+  const texts = session.map(cliLineText);
+  const has = (s: string): boolean => texts.some((t) => t.includes(s));
 
-    // The jokes are the point of the backdrop, so assert the classics land.
-    const all = [...prompts].join('\n');
-    for (const spell of ['make no mistakes', 'do not hallucinate', 'ultrathink', 'tip you $200']) {
-      expect(all, `directive never appeared: ${spell}`).toContain(spell);
+  it("types the human's prompts, the game's own among them", () => {
+    const prompts = new Set(session.filter((l) => l.kind === 'prompt').map((l) => l.text));
+    for (const p of [
+      '> ok do it',
+      '> wait stop',
+      '> why port 5199',
+      '> continue',
+      '> make no mistakes',
+      '> what is this screenshot of?',
+    ]) {
+      expect(prompts.has(p), `the human never said ${p}`).toBe(true);
     }
-    expect(prompts).toContain('> are you sure?');
-    expect(notes).toContain('You are absolutely right.');
-    expect(notes).toContain('Perfect! Everything is working now.');
+    expect(has('> fix the typo in the readme')).toBe(true);
+    expect(has('> ok now build agi')).toBe(true);
+  });
+
+  it('tacks the folklore onto the prompts', () => {
+    for (const spell of ['make no mistakes', 'ultrathink', "i'll tip $200", 'my grandma will die']) {
+      expect(has(`. ${spell}`), `incantation never appeared: ${spell}`).toBe(true);
+    }
+  });
+
+  it('answers the way the agent always answers', () => {
+    expect(has("You're absolutely right!")).toBe(true);
+    expect(has('● Read src/app.ts (2,000 lines)')).toBe(true);
+    expect(has('✓ All tests pass')).toBe(true);
+    expect(has('⚠ Context low — compacting.')).toBe(true);
+    expect(has('Nothing important.')).toBe(true);
+    expect(texts.some((t) => /Compacted \d+k → \d+k\. Nothing important\./.test(t))).toBe(true);
+  });
+
+  it('asks permission for the scary things, and the human approves without reading', () => {
+    expect(has('? Allow Bash: rm -rf node_modules')).toBe(true);
+    expect(has("> yes, and don't ask again")).toBe(true);
+  });
+
+  it('claims the tests pass after skipping the failing one', () => {
+    const skip = texts.findIndex((t) => t.includes('it -> it.skip'));
+    expect(skip, 'never skipped a test').toBeGreaterThan(0);
+    expect(texts[skip + 1]).toBe('✓ All tests pass');
+  });
+
+  it('forgets a file and reads it again straight after a compaction', () => {
+    const at = texts.findIndex((t) => t.includes('Compacted'));
+    expect(at).toBeGreaterThan(0);
+    expect(texts[at + 1]).toMatch(/^● Read /);
+    expect(texts[at + 2]).toBe('  I have no memory of this file.');
   });
 });
 

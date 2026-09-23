@@ -347,3 +347,23 @@ export function formatCompact(value: number): string {
   const s = (n < 10 ? n.toFixed(2) : n < 100 ? n.toFixed(1) : String(Math.floor(n))) + SUFFIXES[tier];
   return neg ? `-${s}` : s;
 }
+
+function oneDecimal(v: number): string {
+  const s = v.toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
+}
+
+/**
+ * Context sizes the way the game names windows (formatContext style):
+ * 400, 8K, 7.6K, 184K, 1M, 1.5M, 10M. Used by the compaction line,
+ * "Compacted 184K -> 9K. Nothing important."
+ */
+export function formatContextShort(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  if (Math.round(value) < 1000) return String(Math.round(value));
+  const k = value / 1e3;
+  const kText = k < 10 ? oneDecimal(k) : String(Math.round(k));
+  if (Number(kText) < 1000) return `${kText}K`;
+  const m = value / 1e6;
+  return `${m < 10 ? oneDecimal(m) : String(Math.round(m))}M`;
+}

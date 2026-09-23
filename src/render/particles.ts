@@ -18,6 +18,10 @@ export const P_MOTE = 1;
 export const P_CONFETTI = 2;
 export const P_SHARD = 3;
 export const P_SPARK = 4;
+/** A token flying from where it was generated into the context pile. */
+export const P_TOKEN = 5;
+/** A shard of screen glass ("wait stop"). */
+export const P_GLASS = 6;
 
 /** Index -> colour, so the hot arrays can stay numeric. */
 export const PARTICLE_COLORS: readonly string[] = [
@@ -29,6 +33,8 @@ export const PARTICLE_COLORS: readonly string[] = [
   PALETTE.purple,
   PALETTE.white,
   PALETTE.fg1,
+  '#9fd0ff',
+  '#7ddf78',
 ];
 export const C_GREEN = 0;
 export const C_GREEN2 = 1;
@@ -38,6 +44,8 @@ export const C_BLUE = 4;
 export const C_PURPLE = 5;
 export const C_WHITE = 6;
 export const C_FG1 = 7;
+export const C_GLASS = 8;
+export const C_TOKEN = 9;
 
 /** Glyphs used for ship confetti and ambient code motes. */
 const CONFETTI_GLYPHS = '{};()</>';
@@ -135,6 +143,11 @@ export class ParticleSystem {
   private readonly glyph: Uint8Array;
   private readonly alive: Uint8Array;
   private readonly label: (string | null)[];
+  /** Flight targets and arc height, for P_TOKEN. */
+  private readonly tx: Float32Array;
+  private readonly ty: Float32Array;
+  private readonly sx: Float32Array;
+  private readonly sy: Float32Array;
 
   private readonly free: Int32Array;
   private freeTop: number;
@@ -165,6 +178,10 @@ export class ParticleSystem {
     this.glyph = new Uint8Array(cap);
     this.alive = new Uint8Array(cap);
     this.label = new Array<string | null>(cap).fill(null);
+    this.tx = new Float32Array(cap);
+    this.ty = new Float32Array(cap);
+    this.sx = new Float32Array(cap);
+    this.sy = new Float32Array(cap);
     this.free = new Int32Array(cap);
     for (let i = 0; i < cap; i++) {
       this.free[i] = cap - 1 - i;
@@ -316,6 +333,48 @@ export class ParticleSystem {
     }
   }
 
+  /**
+   * A token flying from (x0, y0) into the pile at (x1, y1), along an arc
+   * `arc` pixels high. Tokens are faceless blocks; `size` 3 or 5.
+   */
+  spawnToken(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    o?: { ttl?: number; arc?: number; size?: number; color?: number },
+  ): void {
+    const i = this.alloc();
+    const s = this.seed[i]!;
+    this.init(i, P_TOKEN, x0, y0, o?.ttl ?? 0.55 + s * 0.25);
+    this.sx[i] = x0;
+    this.sy[i] = y0;
+    this.tx[i] = x1;
+    this.ty[i] = y1;
+    // The arc height rides in `grav` for this kind: no gravity integration.
+    this.grav[i] = o?.arc ?? 18 + s * 16;
+    this.size[i] = o?.size ?? (s > 0.6 ? 5 : 3);
+    this.color[i] = o?.color ?? C_TOKEN;
+  }
+
+  /** "wait stop": the glass lets go. Pale shards that fall and tumble. */
+  burstGlass(x: number, y: number, n: number): void {
+    for (let k = 0; k < n; k++) {
+      const i = this.alloc();
+      const s = this.seed[i]!;
+      const a = (k / Math.max(1, n)) * Math.PI * 2 + s * 0.8;
+      const speed = 30 + s * 110;
+      this.init(i, P_GLASS, x, y, 0.8 + s * 0.9);
+      this.vx[i] = Math.cos(a) * speed;
+      this.vy[i] = Math.sin(a) * speed - 30;
+      this.grav[i] = 220;
+      this.drag[i] = 0.8;
+      this.size[i] = 1 + Math.floor(s * 3);
+      this.vrot[i] = (s - 0.5) * 14;
+      this.color[i] = s > 0.55 ? C_WHITE : C_GLASS;
+    }
+  }
+
   // -- simulation ----------------------------------------------------------
 
   update(dt: number): void {
@@ -341,6 +400,20 @@ export class ParticleSystem {
         continue;
       }
       life[i] = l;
+      if (kind[i] === P_TOKEN) {
+        // Along a quadratic curve: start, a control point `arc` above the
+        // midpoint, the landing spot. Eases in so it drops onto the pile.
+        const u = 1 - l / this.ttl[i]!;
+        const t = u * u * (3 - 2 * u);
+        const cx = (this.sx[i]! + this.tx[i]!) / 2;
+        const cy = Math.min(this.sy[i]!, this.ty[i]!) - grav[i]!;
+        const a = (1 - t) * (1 - t);
+        const b = 2 * (1 - t) * t;
+        const c = t * t;
+        px[i] = a * this.sx[i]! + b * cx + c * this.tx[i]!;
+        py[i] = a * this.sy[i]! + b * cy + c * this.ty[i]!;
+        continue;
+      }
       const d = drag[i]!;
       if (d !== 0) {
         const f = 1 - d * step;
@@ -429,6 +502,25 @@ export class ParticleSystem {
       if (k === P_SHARD) {
         const len = this.size[i]!;
         ctx.fillRect(Math.round(x), Math.round(y), len, 1);
+        ops++;
+      } else if (k === P_TOKEN) {
+        // A tiny token: a lit square with a dark heart. Never eyes.
+        const s = this.size[i]!;
+        const rx = Math.round(x) - (s >> 1);
+        const ry = Math.round(y) - (s >> 1);
+        ctx.fillRect(rx, ry, s, s);
+        ctx.fillStyle = s >= 5 ? '#1f6a2c' : '#2a8a37';
+        ctx.fillRect(rx + 1, ry + 1, s - 2, s - 2);
+        if (s >= 5) {
+          ctx.fillStyle = fill;
+          ctx.fillRect(rx + 2, ry + 2, 1, 1);
+        }
+        lastFill = '';
+        ops += 3;
+      } else if (k === P_GLASS) {
+        const s = this.size[i]!;
+        const spin = ((this.rot[i]! * 2) | 0) & 1;
+        ctx.fillRect(Math.round(x), Math.round(y), spin ? s + 1 : 1, spin ? 1 : s + 1);
         ops++;
       } else if (k === P_SPARK) {
         const tw = ((timeS * 18 + this.seed[i]! * 10) | 0) & 1;

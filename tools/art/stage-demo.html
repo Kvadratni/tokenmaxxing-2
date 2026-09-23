@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tokenmaxxing 2: stage demo</title>
+    <!--
+      The stage on its own, in a real browser, through Vite: the real atlas
+      load, real image decoding, real Canvas2D caches. Not part of the game.
+        npx vite --port 5191  ->  http://localhost:5191/tools/art/stage-demo.html#panic-90
+      Scenario names are in stage-scenarios.mjs. Click the agent to click it.
+    -->
+    <style>
+      html, body { margin: 0; height: 100%; background: #14161a; color: #9aa4b2; font: 12px ui-monospace, monospace; }
+      #host { position: absolute; inset: 0 0 28px 0; display: flex; }
+      nav { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; display: flex; gap: 8px; align-items: center; padding: 0 8px; overflow-x: auto; }
+      nav a { color: #4ec94e; text-decoration: none; white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <div id="host"><canvas id="stage"></canvas></div>
+    <nav id="nav"></nav>
+    <script type="module" src="./stage-demo.mjs"></script>
+  </body>
+</html>

@@ -1,205 +1,124 @@
 #!/usr/bin/env node
-
-import { readFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+/**
+ * `npm run verify:atlas`: fail loudly if the shipped art does not cover the
+ * game.
+ *
+ * Stage atlas (src/render/atlas.ts): every REQUIRED_SPRITES key (which derives
+ * gadget and pickup keys from content.ts) is declared, on a sheet that exists,
+ * with frames inside the sheet, no two frames overlapping, and animations
+ * declaring a frame rate and a single frame size.
+ *
+ * Icon sheet (src/render/icon-map.ts): an icon for every id the UI may ask
+ * for, enumerated from content.ts (tool_, upg_, card_, meta_, pickup_, each
+ * achievement's icon, the ui_* glyphs), each in its own cell inside the grid,
+ * and a PNG on disk of exactly that grid.
+ *
+ * Needs a Node that can import TypeScript directly (22.18+ or 23.6+).
+ */
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { decodePNGSize } from './pixel.mjs';
+import { iconIds, loadRenderContract } from './content.mjs';
 
-const TYPES_PATH = fileURLToPath(new URL('../../src/render/atlas-types.ts', import.meta.url));
-const ATLAS_PATH = fileURLToPath(new URL('../../src/render/atlas.ts', import.meta.url));
+const ATLAS_URL = new URL('../../src/render/atlas.ts', import.meta.url);
+const ICON_MAP_URL = new URL('../../src/render/icon-map.ts', import.meta.url);
+const ICON_PNG = fileURLToPath(new URL('../../public/sprites/icons.png', import.meta.url));
 
-function parseTypes(source, failures) {
-  const requiredBlock = source.match(/export const REQUIRED_SPRITES\s*=\s*\[([\s\S]*?)\]\s*as const/);
-  const required = requiredBlock
-    ? Array.from(requiredBlock[1].matchAll(/'([^']+)'/g), (match) => match[1])
-    : [];
-  if (required.length < 17) failures.push(`atlas-types parse found only ${required.length} required sprites`);
+const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
-  const slotsBlock = source.match(/export const CLUTTER_SLOTS[\s\S]*?=\s*\{([\s\S]*?)\n\};/);
-  const slots = {};
-  if (slotsBlock) {
-    const pattern = /(clutter_\w+):\s*\{\s*x:\s*(-?\d+),\s*y:\s*(-?\d+),\s*maxW:\s*(-?\d+),\s*maxH:\s*(-?\d+)\s*\}/g;
-    for (const match of slotsBlock[1].matchAll(pattern)) {
-      slots[match[1]] = { x: Number(match[2]), y: Number(match[3]), maxW: Number(match[4]), maxH: Number(match[5]) };
+async function verifyAtlas(failures) {
+  const { REQUIRED_SPRITES } = await loadRenderContract();
+  const manifest = (await import(ATLAS_URL.href)).default;
+  if (!manifest?.sheets || !manifest?.sprites) {
+    failures.push('src/render/atlas.ts does not default-export a manifest');
+    return { sprites: 0, frames: 0, sheets: 0 };
+  }
+  const sizes = {};
+  for (const [key, url] of Object.entries(manifest.sheets)) {
+    const path = url.startsWith('file:') ? fileURLToPath(url) : url;
+    if (!existsSync(path)) {
+      failures.push(`sheet ${key} is missing on disk (${path})`);
+      continue;
     }
+    sizes[key] = decodePNGSize(path);
   }
-  if (Object.keys(slots).length < 10) {
-    failures.push(`atlas-types parse found only ${Object.keys(slots).length} clutter slots`);
+  for (const key of REQUIRED_SPRITES) {
+    const def = manifest.sprites[key];
+    if (!def) failures.push(`required sprite ${key} is missing from the atlas`);
+    else if (!def.frames?.length) failures.push(`required sprite ${key} has no frames`);
   }
-
-  const laptopMatch = source.match(/export const LAPTOP_RECT\s*=\s*\{[^}]*?w:\s*(\d+),\s*h:\s*(\d+)\s*\}/);
-  const laptop = laptopMatch ? { w: Number(laptopMatch[1]), h: Number(laptopMatch[2]) } : null;
-  if (!laptop) failures.push('atlas-types parse could not extract LAPTOP_RECT dimensions');
-  return { required, slots, laptop };
-}
-
-function balancedBlock(source, openIndex) {
-  let depth = 0;
-  for (let index = openIndex; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
-    if (source[index] === '}') depth -= 1;
-    if (depth === 0) return source.slice(openIndex + 1, index);
+  for (const key of Object.keys(manifest.sprites)) {
+    if (!REQUIRED_SPRITES.includes(key)) failures.push(`atlas declares ${key}, which nothing requires`);
   }
-  return null;
-}
-
-function parseAtlas(source, failures) {
-  const sheetsMatch = source.match(/sheets:\s*\{([\s\S]*?)\n\s{2}\},\s*\n\s{2}sprites:/);
-  const sheets = {};
-  if (sheetsMatch) {
-    const pattern = /^\s*([A-Za-z_]\w*):\s*new URL\('([^']+)',\s*import\.meta\.url\)\.href,/gm;
-    for (const match of sheetsMatch[1].matchAll(pattern)) sheets[match[1]] = match[2];
+  const bySheet = {};
+  for (const [key, def] of Object.entries(manifest.sprites)) {
+    if (!Object.hasOwn(manifest.sheets, def.sheet)) failures.push(`${key} uses undeclared sheet ${def.sheet}`);
+    const size = sizes[def.sheet];
+    const first = def.frames[0];
+    def.frames.forEach((f, i) => {
+      if (!(f.w > 0 && f.h > 0)) failures.push(`${key} frame ${i} has non-positive size`);
+      if (size && (f.x < 0 || f.y < 0 || f.x + f.w > size.w || f.y + f.h > size.h)) {
+        failures.push(`${key} frame ${i} (${f.x},${f.y},${f.w},${f.h}) lies outside ${def.sheet} (${size.w}x${size.h})`);
+      }
+      if (first && (f.w !== first.w || f.h !== first.h)) failures.push(`${key} frames differ in size`);
+      (bySheet[def.sheet] ??= []).push({ key, i, f });
+    });
+    if (def.frames.length > 1 && !(def.fps > 0)) failures.push(`${key} has ${def.frames.length} frames but no fps`);
   }
-  if (Object.keys(sheets).length === 0) failures.push('atlas parse found no declared sheets');
-
-  const spritesStart = source.match(/\n  sprites:\s*\{/);
-  const spritesBody = spritesStart
-    ? balancedBlock(source, spritesStart.index + spritesStart[0].lastIndexOf('{'))
-    : null;
-  const sprites = {};
-  if (spritesBody !== null) {
-    const property = /^\s{4}([A-Za-z_]\w*):\s*\{/gm;
-    for (const match of spritesBody.matchAll(property)) {
-      const openIndex = match.index + match[0].lastIndexOf('{');
-      const body = balancedBlock(spritesBody, openIndex);
-      if (body === null) continue;
-      const sheetMatch = body.match(/sheet:\s*'([^']+)'/);
-      const framesMatch = body.match(/frames:\s*\[([\s\S]*?)\]/);
-      const frames = [];
-      if (framesMatch) {
-        const framePattern = /\{\s*x:\s*(-?\d+),\s*y:\s*(-?\d+),\s*w:\s*(-?\d+),\s*h:\s*(-?\d+)\s*\}/g;
-        for (const frame of framesMatch[1].matchAll(framePattern)) {
-          frames.push({ x: Number(frame[1]), y: Number(frame[2]), w: Number(frame[3]), h: Number(frame[4]) });
+  for (const [sheet, frames] of Object.entries(bySheet)) {
+    for (let a = 0; a < frames.length; a++) {
+      for (let b = a + 1; b < frames.length; b++) {
+        if (overlaps(frames[a].f, frames[b].f)) {
+          failures.push(`${frames[a].key}#${frames[a].i} overlaps ${frames[b].key}#${frames[b].i} on ${sheet}`);
         }
       }
-      const fpsMatch = body.match(/fps:\s*(-?(?:\d+(?:\.\d*)?|\.\d+))/);
-      sprites[match[1]] = {
-        sheet: sheetMatch?.[1],
-        frames,
-        fps: fpsMatch ? Number(fpsMatch[1]) : undefined,
-      };
     }
   }
-  if (Object.keys(sprites).length < 17) {
-    failures.push(`atlas parse found only ${Object.keys(sprites).length} sprites`);
-  }
-  return { sheets, sprites };
+  const frames = Object.values(manifest.sprites).reduce((n, d) => n + d.frames.length, 0);
+  return { sprites: Object.keys(manifest.sprites).length, frames, sheets: Object.keys(manifest.sheets).length };
 }
 
-const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x
-  && a.y < b.y + b.h && a.y + a.h > b.y;
+async function verifyIcons(failures) {
+  const { all } = await iconIds();
+  const map = await import(ICON_MAP_URL.href);
+  const icons = map.ICONS ?? {};
+  const missing = all.filter((id) => !icons[id]);
+  if (missing.length) failures.push(`icon sheet is missing ${missing.length} id(s): ${missing.join(', ')}`);
+  const wanted = new Set(all);
+  const extra = Object.keys(icons).filter((id) => !wanted.has(id));
+  if (extra.length) failures.push(`icon sheet has ids content does not know: ${extra.join(', ')}`);
+  const cells = new Map();
+  for (const [id, [col, row]] of Object.entries(icons)) {
+    if (col < 0 || row < 0 || col >= map.ICON_COLS || row >= map.ICON_ROWS) failures.push(`${id} is outside the icon grid`);
+    const cell = `${col},${row}`;
+    if (cells.has(cell)) failures.push(`${id} shares cell ${cell} with ${cells.get(cell)}`);
+    cells.set(cell, id);
+  }
+  if (!existsSync(ICON_PNG)) failures.push('public/sprites/icons.png is missing');
+  else {
+    const size = decodePNGSize(ICON_PNG);
+    const w = map.ICON_COLS * map.ICON_SIZE;
+    const h = map.ICON_ROWS * map.ICON_SIZE;
+    if (size.w !== w || size.h !== h) failures.push(`icons.png is ${size.w}x${size.h}; the manifest grid is ${w}x${h}`);
+  }
+  return { icons: Object.keys(icons).length, expected: all.length };
+}
 
-function verify() {
+async function main() {
   const failures = [];
-  const types = parseTypes(readFileSync(TYPES_PATH, 'utf8'), failures);
-  const atlas = parseAtlas(readFileSync(ATLAS_PATH, 'utf8'), failures);
-  const sheetSizes = {};
-
-  for (const [key, relativePath] of Object.entries(atlas.sheets)) {
-    try {
-      const filePath = fileURLToPath(new URL(relativePath, pathToFileURL(ATLAS_PATH)));
-      sheetSizes[key] = decodePNGSize(filePath);
-    } catch (error) {
-      failures.push(`sheet ${key} could not be read: ${error.message}`);
-    }
-  }
-
-  for (const name of types.required) {
-    const sprite = atlas.sprites[name];
-    if (!sprite) failures.push(`required sprite ${name} is missing`);
-    else if (sprite.frames.length === 0) failures.push(`required sprite ${name} has no frames`);
-  }
-
-  for (const [name, sprite] of Object.entries(atlas.sprites)) {
-    if (!Object.hasOwn(atlas.sheets, sprite.sheet)) {
-      failures.push(`${name} uses undeclared sheet ${String(sprite.sheet)}`);
-    }
-    const size = sheetSizes[sprite.sheet];
-    sprite.frames.forEach((frame, index) => {
-      if (frame.w <= 0 || frame.h <= 0) failures.push(`${name} frame ${index} has non-positive dimensions`);
-      if (size && (frame.x < 0 || frame.y < 0
-        || frame.x + frame.w > size.w || frame.y + frame.h > size.h)) {
-        failures.push(
-          `${name} frame ${index} (${frame.x},${frame.y},${frame.w},${frame.h}) `
-            + `lies outside ${sprite.sheet} (${size.w}x${size.h})`,
-        );
-      }
-    });
-
-    if (sprite.frames.length > 1 && !(sprite.fps > 0)) {
-      failures.push(`${name} has ${sprite.frames.length} frames but no positive fps`);
-    }
-    if (sprite.frames.length === 1 && sprite.fps !== undefined) {
-      failures.push(`${name} has one frame but declares fps ${sprite.fps}`);
-    }
-    const first = sprite.frames[0];
-    if (first && sprite.frames.some((frame) => frame.w !== first.w || frame.h !== first.h)) {
-      failures.push(`${name} frames do not share identical dimensions`);
-    }
-  }
-
-  for (const sheet of Object.keys(atlas.sheets)) {
-    const frames = [];
-    for (const [name, sprite] of Object.entries(atlas.sprites)) {
-      if (sprite.sheet !== sheet) continue;
-      sprite.frames.forEach((frame, index) => frames.push({ name, index, frame }));
-    }
-    for (let left = 0; left < frames.length; left += 1) {
-      for (let right = left + 1; right < frames.length; right += 1) {
-        const a = frames[left];
-        const b = frames[right];
-        if (overlaps(a.frame, b.frame)) {
-          failures.push(`${a.name} frame ${a.index} overlaps ${b.name} frame ${b.index} on ${sheet}`);
-        }
-      }
-    }
-  }
-
-  for (const [name, slot] of Object.entries(types.slots)) {
-    const sprite = atlas.sprites[name];
-    if (sprite) {
-      sprite.frames.forEach((frame, index) => {
-        if (frame.w !== slot.maxW || frame.h !== slot.maxH) {
-          failures.push(
-            `${name} frame ${index} is ${frame.w}x${frame.h}; expected ${slot.maxW}x${slot.maxH}`,
-          );
-        }
-      });
-    }
-    if (slot.x + slot.maxW > 320 || slot.y + slot.maxH > 180 || slot.x < 0 || slot.y < 0) {
-      failures.push(`${name} slot (${slot.x},${slot.y},${slot.maxW},${slot.maxH}) exceeds the 320x180 scene`);
-    }
-  }
-
-  const laptop = atlas.sprites.laptop;
-  if (laptop && types.laptop) {
-    laptop.frames.forEach((frame, index) => {
-      if (frame.w !== 64 || frame.h !== 44
-        || frame.w !== types.laptop.w || frame.h !== types.laptop.h) {
-        failures.push(`${'laptop'} frame ${index} is ${frame.w}x${frame.h}; expected 64x44 and LAPTOP_RECT`);
-      }
-    });
-  }
-  for (const name of ['dev_idle', 'dev_type']) {
-    atlas.sprites[name]?.frames.forEach((frame, index) => {
-      if (frame.w !== 24 || frame.h !== 28) failures.push(`${name} frame ${index} is not 24x28`);
-    });
-  }
-  for (const name of types.required.filter((key) => key.startsWith('scene_'))) {
-    atlas.sprites[name]?.frames.forEach((frame, index) => {
-      if (frame.w !== 320 || frame.h !== 180) failures.push(`${name} frame ${index} is not 320x180`);
-    });
-  }
-
-  if (failures.length > 0) {
-    for (const failure of failures) console.error(`FAIL: ${failure}`);
+  const atlas = await verifyAtlas(failures);
+  const icons = await verifyIcons(failures);
+  if (failures.length) {
+    for (const f of failures) process.stderr.write(`FAIL: ${f}\n`);
     process.exit(1);
   }
-
-  const frameCount = Object.values(atlas.sprites).reduce((sum, sprite) => sum + sprite.frames.length, 0);
-  console.log(
-    `verify-atlas: OK — ${Object.keys(atlas.sprites).length} sprites, `
-      + `${frameCount} frames, ${Object.keys(atlas.sheets).length} sheets`,
+  process.stdout.write(
+    `verify-atlas: OK. ${atlas.sprites} sprites, ${atlas.frames} frames, ${atlas.sheets} sheets; `
+      + `${icons.icons}/${icons.expected} icons\n`,
   );
 }
 
-verify();
+main().catch((error) => {
+  process.stderr.write(`verify-atlas: ${error.stack ?? error}\n`);
+  process.exit(1);
+});

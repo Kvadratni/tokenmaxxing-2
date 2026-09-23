@@ -1,145 +1,199 @@
-/**
- * Barrel smoke test: everything the rest of the app imports must resolve from
- * `src/sim/index.ts` and satisfy the frozen `SimApi` contract.
- */
 import { describe, expect, it } from 'vitest';
-import * as Sim from '../../src/sim/index.ts';
-import type { SimApi } from '../../src/sim/types.ts';
+import * as simIndex from '../../src/sim/index.ts';
+import type { Sim } from '../../src/sim/index.ts';
+import { createSim } from '../../src/sim/index.ts';
 
-describe('public surface', () => {
-  it('re-exports the contract constants and content tables', () => {
-    expect(Sim.SCENE_WIDTH).toBe(320);
-    expect(Sim.SCENE_HEIGHT).toBe(180);
-    expect(Sim.AGENT_TIERS).toHaveLength(10);
-    expect(Sim.PROJECTS).toHaveLength(10);
-    expect(Sim.FINAL_PROJECT_INDEX).toBe(9);
-    expect(Sim.BALANCE.MAX_STEP_MS).toBeGreaterThan(0);
+/** Exactly what BUILD_BRIEF.md says index.ts must export. */
+const REQUIRED_VALUES = [
+  'createSim',
+  'DEFAULT_SEED',
+  'unlockedContent',
+  'metaLevel',
+  'metaRequirementsMet',
+  'toolCostAt',
+  'bulkToolCost',
+  'cappedCount',
+  'MAX_BULK_BUY',
+  'visibleToolList',
+  'lockedToolList',
+  'unlockHint',
+  'availableUpgradeList',
+  'makeActiveIncident',
+  'SAVE_KEY',
+  'loadMeta',
+  'saveMeta',
+  'clearMeta',
+  'defaultMeta',
+  'defaultSettings',
+  'metaNextCost',
+  'formatTokens',
+  'formatContext',
+  'formatRate',
+  'formatTime',
+  'formatInt',
+  'formatMult',
+  'formatPercent',
+  'formatEta',
+  // content.ts is re-exported wholesale
+  'BALANCE',
+  'TOOLS',
+  'PROMPTS',
+  'ACHIEVEMENTS',
+  'META_UPGRADES',
+  'modelVersion',
+] as const;
+
+const SIM_API = [
+  'derived',
+  'tick',
+  'click',
+  'collectPickup',
+  'buyTool',
+  'buyUpgrade',
+  'report',
+  'claim',
+  'compact',
+  'keepCards',
+  'absolutelyRight',
+  'pickCard',
+  'rerollDraft',
+  'buyMeta',
+  'endRun',
+  'startRun',
+  'availableUpgrades',
+  'visibleTools',
+  'subscribe',
+  'metaCost',
+  'setSettings',
+  'save',
+  'noteDebugHookUsed',
+  'unlocked',
+  'lockedTools',
+] as const;
+
+const DEBUG_API = [
+  'grantTokens',
+  'grantThumbs',
+  'forceIncident',
+  'forcePickup',
+  'forceDraft',
+  'setContext',
+  'setPatience',
+  'forceVerify',
+  'importLegacy',
+] as const;
+
+function mk(): Sim {
+  return createSim({ seed: 1, storage: null, persist: false });
+}
+
+describe('src/sim/index.ts', () => {
+  it('exports everything the brief promises', () => {
+    const exported = simIndex as Record<string, unknown>;
+    for (const name of REQUIRED_VALUES) expect(exported[name], name).toBeDefined();
+    expect(simIndex.SAVE_KEY).toBe('tokenmaxxing2.save.v1');
+    expect(simIndex.MAX_BULK_BUY).toBeGreaterThan(0);
   });
 
-  it('exports every function the shell needs', () => {
-    const expected = [
-      'createSim',
-      'computeDerived',
-      'aggregate',
-      'metaEffects',
-      'metaLevel',
-      'endlessUnlocked',
-      'generateOffer',
-      'draftPool',
-      'selectIncident',
-      'rollIncidentDelayMs',
-      'loadMeta',
-      'saveMeta',
-      'defaultMeta',
-      'clearMeta',
-      'metaNextCost',
-      'formatSlop',
-      'formatTime',
-      'formatRate',
-      'formatInt',
-      'formatMult',
-      'formatPercent',
-      'formatEta',
-      'createRng',
-      'standaloneRng',
-      'agentCostAt',
-      'bulkAgentCost',
-      'visibleTierList',
-      'availableUpgradeList',
-    ] as const;
-    for (const name of expected) {
-      expect(typeof (Sim as unknown as Record<string, unknown>)[name], name).toBe('function');
-    }
+  it('keeps the save auditor for game 1 private', () => {
+    const exported = simIndex as Record<string, unknown>;
+    expect(exported['legacySignSave']).toBeUndefined();
+    expect(exported['legacyAuditSave']).toBeUndefined();
+    expect(exported['readLegacySave']).toBeUndefined();
+  });
+});
+
+describe('the Sim surface', () => {
+  it('implements SimApi plus the shell conveniences', () => {
+    const s = mk() as unknown as Record<string, unknown>;
+    for (const name of SIM_API) expect(typeof s[name], name).toBe('function');
+    for (const name of DEBUG_API) expect(typeof (s['debug'] as Record<string, unknown>)[name], name).toBe('function');
+    const sim = mk();
+    expect(sim.run.phase).toBe('running');
+    expect(sim.meta.version).toBe(1);
+    expect(sim.patienceMaxMs).toBe(sim.derived().patienceMaxMs);
   });
 
-  it('createSim satisfies SimApi structurally', () => {
-    const sim: SimApi = Sim.createSim({ seed: 1, storage: null, persist: false });
-    const methods: (keyof SimApi)[] = [
-      'derived',
-      'tick',
-      'click',
-      'buyAgent',
-      'buyUpgrade',
-      'ship',
-      'pickCard',
-      'rerollDraft',
-      'buyMeta',
-      'endRun',
-      'startRun',
-      'availableUpgrades',
-      'visibleTiers',
-      'subscribe',
-    ];
-    for (const m of methods) expect(typeof sim[m], m).toBe('function');
-    expect(sim.run).toBeDefined();
-    expect(sim.meta).toBeDefined();
-    expect(sim.derived()).toBeDefined();
+  it('subscribe returns an idempotent unsubscribe and survives a throwing sink', () => {
+    const s = mk();
+    let n = 0;
+    s.subscribe(() => {
+      throw new Error('broken listener');
+    });
+    const off = s.subscribe(() => {
+      n += 1;
+    });
+    s.click(160, 112);
+    expect(n).toBeGreaterThan(0);
+    const seen = n;
+    off();
+    off();
+    s.click(160, 112);
+    expect(n).toBe(seen);
   });
 
-  it('sim.run keeps a stable object identity across runs', () => {
-    const sim = Sim.createSim({ seed: 1, storage: null, persist: false });
-    const first = sim.run;
-    sim.startRun(2);
-    expect(sim.run).toBe(first);
-    expect(sim.run.seed).toBe(2);
+  it('onEvent hears events from construction on', () => {
+    const kinds: string[] = [];
+    createSim({ seed: 1, storage: null, persist: false, onEvent: (e) => kinds.push(e.t) });
+    expect(kinds).toEqual(['runStart']);
   });
 
-  it('DerivedStats carries every field the renderer reads', () => {
-    const sim = Sim.createSim({ seed: 1, storage: null, persist: false });
-    const d = sim.derived();
-    expect(Object.keys(d).sort()).toEqual(
-      [
-        'canShip',
-        'autoClickHz',
-        'clickPower',
-        'critChance',
-        'critMult',
-        'oneShotChance',
-        'oneShotPayoutS',
-        'deadlineProgress',
-        'demosIfEndedNow',
-        'etaSeconds',
-        'headroom',
-        'idleRate',
-        'incidentRateMult',
-        'multipliers',
-        'nextCosts',
-        'requirement',
-        'shipBlockedBy',
-        'shipProgress',
-        'tierRates',
-      ].sort(),
-    );
-    expect(Object.keys(d.tierRates).sort()).toEqual([...Sim.AGENT_TIER_IDS].sort());
-    expect(Object.keys(d.nextCosts).sort()).toEqual([...Sim.AGENT_TIER_IDS].sort());
+  it('autoStart: false leaves a valid, tickable placeholder', () => {
+    const s = createSim({ seed: 1, storage: null, persist: false, autoStart: false });
+    expect(s.run.patienceMs).toBe(s.patienceMaxMs);
+    s.tick(100);
+    expect(s.run.elapsedMs).toBe(100);
+    expect(() => s.derived()).not.toThrow();
   });
 
-  it('RunState carries every field the contract declares', () => {
-    const sim = Sim.createSim({ seed: 1, storage: null, persist: false });
-    expect(Object.keys(sim.run).sort()).toEqual(
-      [
-        'agents',
-        'cards',
-        'clicks',
-        'draftOffer',
-        'draftRerollsLeft',
-        'elapsedMs',
-        'incidents',
-        'nextIncidentInMs',
-        'nextPickupInMs',
-        'owned',
-        'pendingDemos',
-        'phase',
-        'pickup',
-        'projectIndex',
-        'rngState',
-        'seed',
-        'shipped',
-        'slop',
-        'slopEarned',
-        'slopSpent',
-        'timeLeftMs',
-      ].sort(),
-    );
+  it('setSettings clamps and ignores junk', () => {
+    const s = mk();
+    s.setSettings({ musicVolume: 3, sfxVolume: -1, reducedMotion: true });
+    expect(s.meta.settings.musicVolume).toBe(1);
+    expect(s.meta.settings.sfxVolume).toBe(0);
+    expect(s.meta.settings.reducedMotion).toBe(true);
+    s.setSettings({ musicVolume: Number.NaN } as never);
+    expect(s.meta.settings.musicVolume).toBe(1);
+  });
+
+  it('unlocked() and lockedTools() reflect the save', () => {
+    const s = mk();
+    expect([...s.unlocked().tools]).toEqual(['grep', 'read', 'edit', 'bash']);
+    expect(s.lockedTools().map((t) => t.id)).toEqual(['read', 'edit', 'bash']);
+  });
+});
+
+describe('debug hooks', () => {
+  it('grantTokens adds to the wallet and to tokensEarned', () => {
+    const s = mk();
+    s.debug.grantTokens(500);
+    s.debug.grantTokens(-5);
+    s.debug.grantTokens(Number.NaN);
+    expect(s.run.tokens).toBe(500);
+    expect(s.run.tokensEarned).toBe(500);
+  });
+
+  it('grantThumbs counts as earned, so the save stays coherent', () => {
+    const s = mk();
+    s.debug.grantThumbs(12);
+    expect(s.meta.thumbs).toBe(12);
+    expect(s.meta.totalThumbsEarned).toBe(12);
+  });
+
+  it('setContext and setPatience take fractions', () => {
+    const s = mk();
+    s.debug.setContext(0.5);
+    expect(s.derived().contextFill).toBeCloseTo(0.5, 10);
+    s.debug.setPatience(0.25);
+    expect(s.derived().patienceProgress).toBeCloseTo(0.25, 10);
+    s.debug.setPatience(0);
+    expect(s.run.phase).toBe('lost');
+  });
+
+  it('none of them count as the player touching the game', () => {
+    const s = mk();
+    s.debug.grantTokens(10);
+    s.debug.setPatience(1);
+    expect(s.run.clicks).toBe(0);
   });
 });

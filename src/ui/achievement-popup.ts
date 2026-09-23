@@ -4,13 +4,13 @@
  * Slides in from the bottom-right corner with the achievement's own icon, its
  * name and its description, sits there long enough to actually read, then slides
  * out. Deliberately *not* a line in the toast strip: earning one of these is a
- * moment, and the toast strip is where "Not enough slop" lives.
+ * moment, and the toast strip is where "Not enough tokens" lives.
  *
- * Unlocks can land in the same frame (shipping the first project can complete
+ * Unlocks can land in the same frame (reporting the first prompt can complete
  * more than one), so they queue and play one at a time rather than stacking up
  * the corner of the screen.
  */
-import { ACHIEVEMENT_BY_ID } from '../sim/achievements.ts';
+import { ACHIEVEMENT_BY_ID } from '../sim/content.ts';
 import type { AchievementId } from '../sim/types.ts';
 import { TID, tid } from '../testids.ts';
 import { el } from './dom.ts';

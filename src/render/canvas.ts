@@ -8,7 +8,7 @@
  * between crisp pixel art and a shimmering mess.
  */
 import { SCENE_HEIGHT, SCENE_WIDTH } from '../sim/types.ts';
-import { LAPTOP_RECT } from './atlas-types.ts';
+import { AGENT_RECT } from './atlas-types.ts';
 import { PALETTE } from './palette.ts';
 
 export interface ScaleResult {
@@ -241,8 +241,9 @@ export class Viewport {
    * refreshed on resize, but an element can *move* without ever resizing: on a
    * viewport too narrow for the stage, the canvas gets offset (left went to
    * -125 on a phone) while its size is unchanged. The stale origin then sent
-   * every tap tens of scene pixels away from where it landed, so the laptop hit
-   * test failed and touch input did nothing at all.
+   * every tap tens of scene pixels away from where it landed, so the click
+   * target's hit test failed and touch input did nothing at all (game 1 found
+   * this the hard way; the agent inherits the fix).
    *
    * This runs once per pointer event and never inside `draw()`, so the layout
    * read costs nothing that matters.
@@ -277,13 +278,16 @@ export class Viewport {
   }
 }
 
-/** True when the scene-space point is inside the laptop hit box (half-open rect). */
-export function hitsLaptop(x: number, y: number): boolean {
+/**
+ * True when the scene-space point is inside the agent's hit box (half-open
+ * rect). NaN and infinities never hit.
+ */
+export function hitsAgent(x: number, y: number): boolean {
   return (
-    x >= LAPTOP_RECT.x &&
-    x < LAPTOP_RECT.x + LAPTOP_RECT.w &&
-    y >= LAPTOP_RECT.y &&
-    y < LAPTOP_RECT.y + LAPTOP_RECT.h
+    x >= AGENT_RECT.x &&
+    x < AGENT_RECT.x + AGENT_RECT.w &&
+    y >= AGENT_RECT.y &&
+    y < AGENT_RECT.y + AGENT_RECT.h
   );
 }
 

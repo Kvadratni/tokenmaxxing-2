@@ -1,284 +1,421 @@
 /**
- * Run HUD: wallet, ship bar, CI-pipeline deadline burndown, incident stack,
- * active cards and the ship button.
+ * The HUD band across the top of the run screen, laid out like the concept:
  *
- * Every read from state goes through a cached cell (see `dom.ts`) so a frame
- * where nothing moved writes nothing at all.
+ *   TOKENS        PROMPT 3/10 "make the tests pass"           2.5 (new)   [ REPORT DONE  S ]
+ *   184.2K        [CONTEXT WINDOW ███████████░░ 184K / 200K] [/compact C] [████░ 12.4K / 22.5K]
+ *   2.1K TOK/S…   HUMAN PATIENCE 0:42 [▮▮▮▮▮▯▯] [YOU'RE ABSOLUTELY RIGHT +6% Y]  👍 3 · TECH DEBT 2
+ *
+ * Every read goes through a cached cell (see `dom.ts`), so a frame where
+ * nothing moved writes nothing at all.
  */
+import { BALANCE, FINAL_PROMPT_INDEX, promptAt } from '../sim/content.ts';
+import type { DerivedStats, MetaState, ReportState, RunPhase, RunState } from '../sim/types.ts';
+import { TID } from '../testids.ts';
+import { Attr, btn, Dis, el, Flag, Hide, on, Sty, Txt } from './dom.ts';
 import {
-  BALANCE,
-  CARD_BY_ID,
-  INCIDENT_BY_ID,
-  META_BY_ID,
-  META_UPGRADES,
-  projectAt,
-  PROJECT_NAMES,
-} from '../sim/content.ts';
-import type { DerivedStats, MetaState, RunState } from '../sim/types.ts';
-import { TID, tid } from '../testids.ts';
-import { Attr, btn, Dis, el, Flag, Hide, KeyedRows, on, Sty, Txt } from './dom.ts';
-import { barWidth, fmtEta, fmtInt, fmtNum, fmtShortTime, fmtTime } from './format.ts';
-import { formatSlops, slopUnitName } from '../sim/format.ts';
+  barWidth,
+  fmtClock,
+  fmtGain,
+  fmtMult,
+  fmtPct,
+  fmtRate,
+  fmtSeconds,
+  formatContext,
+  formatInt,
+  formatTokens,
+} from './format.ts';
+import { UI_ICONS } from './icon-ids.ts';
+import { iconOrGlyph } from './icon.ts';
 import { RollUp } from './rollup.ts';
 import type { UICtx } from './types.ts';
 
-/** Deadline fractions at which the burndown changes colour. */
-const WARN_AT = 0.5;
-const CRIT_AT = 0.25;
-const FLASH_SECONDS = 10;
+/** Context fills at which the bar turns amber, then red. */
+export const CONTEXT_AMBER_AT = 0.8;
+export const CONTEXT_RED_AT = 0.95;
+/** Only hint "full in 42s" when the overflow is this close. */
+const COMPACTION_HINT_S = 90;
 
-interface IncidentRow {
-  el: HTMLElement;
-  timer: Txt;
-  clicks: Txt;
-  clicksHide: Hide;
+/** What the report button shows, as plain data. Exported for tests. */
+export interface ReportView {
+  readonly state: ReportState;
+  readonly label: string;
+  /** Second line under the label; '' when there is nothing to add. */
+  readonly sub: string;
+  readonly disabled: boolean;
+  /** Which sim action a press sends. */
+  readonly action: 'report' | 'claim' | null;
+  readonly aria: string;
 }
 
-interface CardChip {
-  el: HTMLElement;
+/** The one button with four faces, straight from `derived.reportState`. */
+export function reportView(d: DerivedStats, phase: RunPhase): ReportView {
+  const running = phase === 'running';
+  switch (d.reportState) {
+    case 'report':
+      return {
+        state: 'report',
+        label: 'REPORT DONE',
+        sub: '',
+        disabled: !running,
+        action: 'report',
+        aria: 'Report done: the wallet covers the prompt',
+      };
+    case 'claim': {
+      const v = fmtPct(d.verifyChance);
+      return {
+        state: 'claim',
+        label: 'CLAIM DONE',
+        sub: `verify ${v}`,
+        disabled: !running,
+        action: 'claim',
+        aria: `Claim done: spends the whole wallet; ${v} chance the human checks`,
+      };
+    }
+    case 'blocked': {
+      const why = d.reportBlockedBy ?? 'an outage';
+      return {
+        state: 'blocked',
+        label: 'BLOCKED',
+        sub: why,
+        disabled: true,
+        action: null,
+        aria: `Cannot report: ${why}`,
+      };
+    }
+    case 'working':
+    default:
+      return {
+        state: 'working',
+        label: 'WORKING…',
+        sub: `claim at ${fmtPct(d.claimThreshold)}`,
+        disabled: true,
+        action: null,
+        aria: 'Working: not enough tokens to report or claim yet',
+      };
+  }
+}
+
+/** `PROMPT 3/10`, or just `PROMPT 14` once Endless Mode runs past the tenth. */
+export function promptLabel(index: number): string {
+  const total = FINAL_PROMPT_INDEX + 1;
+  return index < total ? `PROMPT ${index + 1}/${total}` : `PROMPT ${index + 1}`;
 }
 
 export class Hud {
   readonly el: HTMLElement;
-  /** Canvas the renderer attaches to. */
-  readonly canvas: HTMLCanvasElement;
-  /** Transparent full-scene input surface (`TID.laptop`). */
-  readonly hitArea: HTMLButtonElement;
-  readonly stage: HTMLElement;
+  /** The report button, for focus hand-off and tests. */
+  readonly reportBtn: HTMLButtonElement;
 
-  private readonly slop: Txt;
+  private readonly tokens: Txt;
   private readonly rate: Txt;
   private readonly click: Txt;
-  private readonly projNum: Txt;
-  private readonly projName: Txt;
-  private readonly requirement: Txt;
-  private readonly eta: Txt;
-  private readonly demoTally: Txt;
-  private readonly deadlineText: Txt;
+  private readonly crit: Txt;
+  private readonly critHide: Hide;
+  private readonly risk: Txt;
+  private readonly riskHot: Flag;
 
-  private readonly shipFillW: Sty;
-  private readonly shipReady: Flag;
-  private readonly shipAria: Attr;
+  private readonly promptNum: Txt;
+  private readonly promptText: Txt;
+  private readonly model: Txt;
+
+  private readonly ctxFillW: Sty;
+  private readonly ctxFloorW: Sty;
+  private readonly ctxFloorHide: Hide;
+  private readonly ctxAmber: Flag;
+  private readonly ctxRed: Flag;
+  private readonly ctxBusy: Flag;
+  private readonly ctxAria: Attr;
+  private readonly ctxAriaText: Attr;
+  private readonly ctxText: Txt;
+  private readonly ctxEta: Txt;
+  private readonly ctxEtaHide: Hide;
+
+  private readonly compactBtn: HTMLButtonElement;
+  private readonly compactHide: Hide;
+  private readonly compactDis: Dis;
+  private readonly compactSub: Txt;
+
+  private readonly patFillW: Sty;
+  private readonly patText: Txt;
+  private readonly patLabel: Txt;
+  private readonly patFrozen: Flag;
+  private readonly patLow: Flag;
+  private readonly patAria: Attr;
+
+  private readonly sycBtn: HTMLButtonElement;
+  private readonly sycDis: Dis;
+  private readonly sycPower: Txt;
+  private readonly sycFade: Sty;
+  private readonly sycSpent: Flag;
+
+  private readonly reportTxt: Txt;
+  private readonly reportSub: Txt;
+  private readonly reportSubHide: Hide;
+  private readonly verify: Txt;
+  private readonly verifyHide: Hide;
+  private readonly reportDis: Dis;
+  private readonly reportState: Attr;
+  private readonly reportAria: Attr;
+  private readonly reqFillW: Sty;
+  private readonly reqAria: Attr;
+  private readonly reqReady: Flag;
+  private readonly reqClaimLeft: Sty;
+  private readonly reqText: Txt;
   private readonly ghostLeft: Sty;
   private readonly ghostWidth: Sty;
-  private readonly previewOn: Flag;
+  private readonly ghostOn: Flag;
 
-  private readonly dlFillW: Sty;
-  private readonly dlWarn: Flag;
-  private readonly dlCrit: Flag;
-  private readonly dlFlash: Flag;
-  private readonly dlAria: Attr;
-
-  private readonly slopLabel!: Txt;
-  private readonly risk!: Txt;
-  private readonly riskFlag!: Flag;
-  private readonly crit!: Txt;
-  private readonly critHide!: Hide;
-  private readonly shipTxt!: Txt;
-  private readonly shipBlocked!: Flag;
-  private readonly shipLabel!: Attr;
-  private readonly shipBtn: HTMLButtonElement;
-  private readonly shipDis: Dis;
-
-  private readonly incidentsHost: HTMLElement;
-  private readonly incidentsHide: Hide;
-  private readonly incidentRows: KeyedRows<IncidentRow>;
-  private readonly incidentIds: string[] = [];
-
-  private readonly cardsHost: HTMLElement;
-  private readonly cardRows: KeyedRows<CardChip>;
+  private readonly thumbs: Txt;
+  private readonly debt: Txt;
+  private readonly debtHide: Hide;
 
   private readonly roll = new RollUp(250);
   private readonly disposers: Array<() => void> = [];
   private previewCost: number | null = null;
-  private readonly chipKeys: string[] = [];
+  /** The press power seen with no heat on it this run: the fade's full strength. */
+  private sycRef = 0;
+  private compactUnlocked = false;
+  private action: 'report' | 'claim' | null = null;
 
   constructor(parent: HTMLElement, private readonly ctx: UICtx) {
-    this.el = el('div', { cls: 'tm-col', parent });
+    this.el = el('section', { cls: 'tm-hud', parent, attrs: { 'aria-label': 'Session status' } });
 
-    // ---- HUD band ----------------------------------------------------
-    const hud = el('section', { cls: 'tm-hud', parent: this.el, attrs: { 'aria-label': 'Run status' } });
-
-    const wallet = el('div', { cls: 'tm-hud__wallet', parent: hud });
-    this.slopLabel = new Txt(
-      el('div', { cls: 'tm-hud__slop-label', text: 'SLOP', parent: wallet }),
-    );
-    this.slop = new Txt(
-      el('div', { cls: 'tm-hud__slop', tid: TID.slop, text: '0', parent: wallet }),
-    );
-    const sub = el('div', { cls: 'tm-hud__sub', parent: wallet });
-    this.rate = new Txt(el('span', { cls: 'tm-hud__rate', tid: TID.slopRate, text: '0/s', parent: sub }));
-    this.click = new Txt(
-      el('span', { cls: 'tm-hud__click', tid: TID.clickPower, text: '+1/click', parent: sub }),
-    );
-    const riskEl = el('span', {
-      cls: 'tm-hud__risk',
-      tid: TID.incidentRisk,
-      parent: sub,
-      attrs: { title: 'Incident rate. Higher means outages and debuffs land more often.' },
-    });
-    this.risk = new Txt(riskEl);
-    this.riskFlag = new Flag(riskEl, 'is-hot');
-
-    // Crit is a dial the player spends on, so it has to be visible. Hidden
-    // entirely at the base rate — a permanent "CRIT 4%" is just noise.
+    // ---- wallet ---------------------------------------------------------
+    const wallet = el('div', { cls: 'tm-hud__wallet', parent: this.el });
+    el('div', { cls: 'tm-hud__label', text: 'TOKENS', parent: wallet });
+    this.tokens = new Txt(el('div', { cls: 'tm-hud__tokens', tid: TID.tokens, text: '0', parent: wallet }));
+    const rates = el('div', { cls: 'tm-hud__rates', parent: wallet });
+    this.rate = new Txt(el('span', { cls: 'tm-hud__rate', tid: TID.tokenRate, text: '0 TOK/S', parent: rates }));
+    el('span', { cls: 'tm-hud__sep', text: '·', parent: rates, attrs: { 'aria-hidden': 'true' } });
+    this.click = new Txt(el('span', { cls: 'tm-hud__click', tid: TID.clickPower, text: '+0/CLICK', parent: rates }));
+    const dials = el('div', { cls: 'tm-hud__dials', parent: wallet });
     const critEl = el('span', {
       cls: 'tm-hud__crit',
       tid: TID.critChance,
-      parent: sub,
-      attrs: { title: 'Chance a click crits, and the chance an agent one-shots it.' },
+      parent: dials,
+      attrs: { title: 'Chance a click crits, and the chance a tool one-shots it.' },
     });
     this.crit = new Txt(critEl);
     this.critHide = new Hide(critEl);
+    const riskEl = el('span', {
+      cls: 'tm-hud__risk',
+      tid: TID.incidentRisk,
+      parent: dials,
+      attrs: { title: 'Incident rate. Tech debt pushes it up.' },
+    });
+    this.risk = new Txt(riskEl);
+    this.riskHot = new Flag(riskEl, 'is-hot');
 
-    const bars = el('div', { cls: 'tm-hud__bars', parent: hud });
+    // ---- session: prompt, context, patience ------------------------------
+    const session = el('div', { cls: 'tm-hud__session', parent: this.el });
+    const prompt = el('div', { cls: 'tm-hud__prompt', parent: session });
+    this.promptNum = new Txt(
+      el('span', { cls: 'tm-hud__prompt-num', tid: TID.promptNum, text: 'PROMPT 1/10', parent: prompt }),
+    );
+    this.promptText = new Txt(el('span', { cls: 'tm-hud__prompt-text', tid: TID.promptText, parent: prompt }));
+    this.model = new Txt(
+      el('span', {
+        cls: 'tm-hud__model',
+        tid: TID.modelVersion,
+        parent: prompt,
+        attrs: { title: 'The model version playing this session' },
+      }),
+    );
 
-    const line = el('div', { cls: 'tm-hud__line', parent: bars });
-    this.projNum = new Txt(
-      el('span', { cls: 'tm-hud__projnum', tid: TID.projectNum, text: 'PROJECT 1', parent: line }),
-    );
-    this.projName = new Txt(
-      el('span', { cls: 'tm-hud__projname', tid: TID.projectName, text: '—', parent: line }),
-    );
-    el('span', { cls: 'tm-hud__line-spacer', parent: line });
-    this.requirement = new Txt(
-      el('span', { cls: 'tm-hud__req', tid: TID.requirement, text: '0 / 0', parent: line }),
-    );
-    this.eta = new Txt(el('span', { cls: 'tm-hud__eta', text: '', parent: line }));
-
-    // ship bar — the wallet *is* the bar
-    const shipBar = el('div', {
-      cls: 'tm-bar tm-bar--ship',
-      tid: TID.shipBar,
-      parent: bars,
+    const ctxRow = el('div', { cls: 'tm-hud__row', parent: session });
+    const ctxBar = el('div', {
+      cls: 'tm-meter tm-meter--context',
+      tid: TID.contextBar,
+      parent: ctxRow,
       attrs: {
         role: 'progressbar',
-        'aria-label': 'Ship progress',
+        'aria-label': 'Context window',
         'aria-valuemin': '0',
         'aria-valuemax': '100',
         'aria-valuenow': '0',
       },
     });
-    const shipFill = el('div', { cls: 'tm-bar__fill', tid: TID.shipBarFill, parent: shipBar });
-    const ghost = el('div', { cls: 'tm-bar__ghost', parent: shipBar });
-    this.shipFillW = new Sty(shipFill, 'width');
-    this.shipReady = new Flag(shipBar, 'is-ready');
-    this.shipAria = new Attr(shipBar, 'aria-valuenow');
-    this.ghostLeft = new Sty(ghost, 'left');
-    this.ghostWidth = new Sty(ghost, 'width');
-    this.previewOn = new Flag(shipBar, 'is-preview');
+    el('div', { cls: 'tm-meter__zones', parent: ctxBar, attrs: { 'aria-hidden': 'true' } });
+    const ctxFill = el('div', { cls: 'tm-meter__fill', tid: TID.contextFill, parent: ctxBar });
+    const floor = el('div', {
+      cls: 'tm-meter__floor',
+      parent: ctxBar,
+      attrs: { title: 'Permanent: MCP manuals. Compaction cannot free this.' },
+    });
+    const ctxLabels = el('div', { cls: 'tm-meter__labels', parent: ctxBar });
+    iconOrGlyph(UI_ICONS.context, '', ctxLabels).classList.add('tm-meter__icon');
+    // "CONTEXT WINDOW" on a wide screen, "CONTEXT" where the bar is short;
+    // either gives way to "COMPACTING…" while a compaction runs (CSS).
+    const label = el('span', { cls: 'tm-meter__label', parent: ctxLabels });
+    el('span', { text: 'CONTEXT', parent: label });
+    el('span', { cls: 'tm-wide-only', text: ' WINDOW', parent: label });
+    el('span', { cls: 'tm-meter__busy', text: 'COMPACTING…', parent: ctxLabels });
+    this.ctxText = new Txt(el('span', { cls: 'tm-meter__value', tid: TID.contextText, parent: ctxLabels }));
+    const eta = el('span', { cls: 'tm-meter__eta', parent: ctxLabels });
+    this.ctxEta = new Txt(eta);
+    this.ctxEtaHide = new Hide(eta);
+    this.ctxEtaHide.set(true);
+    this.ctxFillW = new Sty(ctxFill, 'width');
+    this.ctxFloorW = new Sty(floor, 'width');
+    this.ctxFloorHide = new Hide(floor);
+    this.ctxFloorHide.set(true);
+    this.ctxAmber = new Flag(ctxBar, 'is-amber');
+    this.ctxRed = new Flag(ctxBar, 'is-red');
+    this.ctxBusy = new Flag(ctxBar, 'is-compacting');
+    this.ctxAria = new Attr(ctxBar, 'aria-valuenow');
+    this.ctxAriaText = new Attr(ctxBar, 'aria-valuetext');
 
-    // deadline burndown — CI pipeline strip
-    const dlBar = el('div', {
-      cls: 'tm-bar tm-bar--deadline',
-      tid: TID.deadlineBar,
-      parent: bars,
+    this.compactBtn = btn({
+      cls: 'tm-btn tm-hud__compact',
+      tid: TID.compactButton,
+      parent: ctxRow,
+      attrs: {
+        'aria-keyshortcuts': 'C',
+        title: 'Summarise and forget, on your terms: no patience cost. Generation pauses while it runs.',
+      },
+    });
+    iconOrGlyph(UI_ICONS.compact, '', this.compactBtn).classList.add('tm-btn__icon');
+    el('span', { cls: 'tm-hud__compact-cmd', text: '/compact', parent: this.compactBtn });
+    this.compactSub = new Txt(el('span', { cls: 'tm-btn__sub', parent: this.compactBtn }));
+    el('kbd', { text: 'C', parent: this.compactBtn });
+    this.compactHide = new Hide(this.compactBtn);
+    this.compactHide.set(true);
+    this.compactDis = new Dis(this.compactBtn);
+
+    const patRow = el('div', { cls: 'tm-hud__row', parent: session });
+    const patBox = el('div', { cls: 'tm-patience', parent: patRow });
+    const patHead = el('div', { cls: 'tm-patience__head', parent: patBox });
+    iconOrGlyph(UI_ICONS.patience, '', patHead).classList.add('tm-meter__icon');
+    this.patLabel = new Txt(el('span', { cls: 'tm-patience__label', text: 'HUMAN PATIENCE', parent: patHead }));
+    this.patText = new Txt(
+      el('span', { cls: 'tm-patience__time', tid: TID.patienceText, text: '0:00', parent: patHead }),
+    );
+    const patBar = el('div', {
+      cls: 'tm-meter tm-meter--patience',
+      tid: TID.patienceBar,
+      parent: patBox,
       attrs: {
         role: 'progressbar',
-        'aria-label': 'Deadline remaining',
+        'aria-label': 'Human patience',
         'aria-valuemin': '0',
         'aria-valuemax': '100',
         'aria-valuenow': '100',
       },
     });
-    const dlFill = el('div', { cls: 'tm-bar__fill', tid: TID.deadlineFill, parent: dlBar });
-    el('div', { cls: 'tm-bar__segs', parent: dlBar });
-    this.deadlineText = new Txt(
-      el('span', { cls: 'tm-bar__time', tid: TID.deadlineText, text: '00:00.0', parent: dlBar }),
-    );
-    this.dlFillW = new Sty(dlFill, 'width');
-    this.dlWarn = new Flag(dlBar, 'is-warn');
-    this.dlCrit = new Flag(dlBar, 'is-crit');
-    this.dlFlash = new Flag(dlBar, 'is-flash');
-    this.dlAria = new Attr(dlBar, 'aria-valuenow');
+    const patFill = el('div', { cls: 'tm-meter__fill', tid: TID.patienceFill, parent: patBar });
+    this.patFillW = new Sty(patFill, 'width');
+    this.patFrozen = new Flag(patBox, 'is-frozen');
+    this.patLow = new Flag(patBox, 'is-low');
+    this.patAria = new Attr(patBar, 'aria-valuenow');
 
-    const right = el('div', { cls: 'tm-hud__right', parent: hud });
-    this.shipBtn = btn({
-      cls: 'tm-ship',
-      tid: TID.shipButton,
-      text: 'SHIP IT',
-      parent: right,
-      attrs: { 'aria-keyshortcuts': 'S' },
+    this.sycBtn = btn({
+      cls: 'tm-btn tm-hud__syc',
+      tid: TID.sycophancyButton,
+      parent: patRow,
+      attrs: {
+        'aria-keyshortcuts': 'Y',
+        title: 'Restores patience. Every press is worth half the last, and costs context.',
+      },
     });
-    this.shipTxt = new Txt(this.shipBtn);
-    this.shipDis = new Dis(this.shipBtn);
-    this.shipDis.set(true);
-    this.shipBlocked = new Flag(this.shipBtn, 'is-blocked');
-    this.shipLabel = new Attr(this.shipBtn, 'aria-label');
-    const demos = el('div', { cls: 'tm-hud__demos', tid: TID.demoTally, parent: right });
-    // The value lives in its own node: writing textContent on the container
-    // would wipe the label.
-    this.demoTally = new Txt(el('span', { text: '◈ 0', parent: demos }));
-    el('small', { text: 'demos · banked at run end', parent: demos });
+    el('span', { cls: 'tm-hud__syc-text', text: "YOU'RE ABSOLUTELY RIGHT", parent: this.sycBtn });
+    this.sycPower = new Txt(el('span', { cls: 'tm-hud__syc-power', text: '+0%', parent: this.sycBtn }));
+    el('kbd', { text: 'Y', parent: this.sycBtn });
+    this.sycDis = new Dis(this.sycBtn);
+    this.sycFade = new Sty(this.sycBtn, '--syc');
+    this.sycSpent = new Flag(this.sycBtn, 'is-spent');
+
+    // ---- report ----------------------------------------------------------
+    const report = el('div', { cls: 'tm-hud__report', parent: this.el });
+    this.reportBtn = btn({
+      cls: 'tm-report',
+      tid: TID.reportButton,
+      parent: report,
+      attrs: { 'aria-keyshortcuts': 'S', 'data-state': 'working' },
+    });
+    const reportFace = el('span', { cls: 'tm-report__face', parent: this.reportBtn });
+    iconOrGlyph(UI_ICONS.claim, '', reportFace).classList.add('tm-report__icon');
+    this.reportTxt = new Txt(el('span', { cls: 'tm-report__label', text: 'WORKING…', parent: reportFace }));
+    const reportSub = el('span', { cls: 'tm-report__sub', parent: this.reportBtn });
+    this.reportSub = new Txt(reportSub);
+    this.reportSubHide = new Hide(reportSub);
+    const verify = el('span', { cls: 'tm-report__verify', tid: TID.verifyChance, parent: this.reportBtn });
+    this.verify = new Txt(verify);
+    this.verifyHide = new Hide(verify);
+    this.verifyHide.set(true);
+    el('kbd', { text: 'S', parent: this.reportBtn });
+    this.reportDis = new Dis(this.reportBtn);
+    this.reportDis.set(true);
+    this.reportState = new Attr(this.reportBtn, 'data-state');
+    this.reportAria = new Attr(this.reportBtn, 'aria-label');
+
+    const reqBar = el('div', {
+      cls: 'tm-reqbar',
+      tid: TID.reportBar,
+      parent: report,
+      attrs: {
+        role: 'progressbar',
+        'aria-label': 'Tokens toward this prompt',
+        'aria-valuemin': '0',
+        'aria-valuemax': '100',
+        'aria-valuenow': '0',
+      },
+    });
+    const reqFill = el('div', { cls: 'tm-reqbar__fill', tid: TID.reportBarFill, parent: reqBar });
+    const ghost = el('div', { cls: 'tm-reqbar__ghost', parent: reqBar, attrs: { 'aria-hidden': 'true' } });
+    const claimTick = el('div', {
+      cls: 'tm-reqbar__claim',
+      parent: reqBar,
+      attrs: { 'aria-hidden': 'true', title: 'Claim Done unlocks here' },
+    });
+    this.reqText = new Txt(el('span', { cls: 'tm-reqbar__text', tid: TID.requirement, parent: reqBar }));
+    this.reqFillW = new Sty(reqFill, 'width');
+    this.reqAria = new Attr(reqBar, 'aria-valuenow');
+    this.reqReady = new Flag(reqBar, 'is-ready');
+    this.reqClaimLeft = new Sty(claimTick, 'left');
+    this.ghostLeft = new Sty(ghost, 'left');
+    this.ghostWidth = new Sty(ghost, 'width');
+    this.ghostOn = new Flag(reqBar, 'is-preview');
+
+    const tally = el('div', { cls: 'tm-hud__tally', parent: report });
+    const thumbs = el('span', {
+      cls: 'tm-hud__thumbs',
+      tid: TID.thumbsTally,
+      parent: tally,
+      attrs: { title: '👍 this session has earned. Banked when it ends, win or lose.' },
+    });
+    iconOrGlyph(UI_ICONS.thumbs, '👍', thumbs).classList.add('tm-hud__thumbs-icon');
+    this.thumbs = new Txt(el('b', { text: '0', parent: thumbs }));
+    el('small', { text: 'banked at run end', parent: thumbs });
+    const debt = el('span', {
+      cls: 'tm-chip tm-chip--debt',
+      tid: TID.techDebt,
+      parent: tally,
+      attrs: { title: 'Every claim that got past the human. Each point raises the incident rate.' },
+    });
+    this.debt = new Txt(debt);
+    this.debtHide = new Hide(debt);
+    this.debtHide.set(true);
 
     this.disposers.push(
-      on(this.shipBtn, 'click', () => {
-        if (this.shipBtn.disabled) return;
-        const ok = this.ctx.sim.ship();
-        this.ctx.emit({ t: 'ship', ok });
-        if (!ok) this.ctx.toast('Not enough slop to ship', 'bad');
+      on(this.reportBtn, 'click', () => this.pressReport()),
+      on(this.compactBtn, 'click', () => {
+        if (!this.compactBtn.disabled) this.ctx.emit({ t: 'compact' });
+      }),
+      on(this.sycBtn, 'click', () => {
+        if (!this.sycBtn.disabled) this.ctx.emit({ t: 'absolutelyRight' });
       }),
     );
+  }
 
-    // ---- stage ---------------------------------------------------------
-    this.stage = el('div', { cls: 'tm-stage', parent: this.el });
-    this.canvas = document.createElement('canvas');
-    this.canvas.className = 'tm-scene';
-    this.canvas.width = 320;
-    this.canvas.height = 180;
-    this.canvas.setAttribute('data-testid', TID.scene);
-    this.canvas.setAttribute('aria-hidden', 'true');
-    this.stage.appendChild(this.canvas);
+  /** What S does right now. Null when the button is not live. */
+  get reportAction(): 'report' | 'claim' | null {
+    return this.action;
+  }
 
-    this.hitArea = btn({
-      cls: 'tm-laptop-hit',
-      tid: TID.laptop,
-      parent: this.stage,
-      label: 'Write code — click to produce slop',
-      attrs: { 'aria-keyshortcuts': 'Space Enter' },
-    });
-    this.disposers.push(
-      on(this.hitArea, 'pointerdown', (ev) => {
-        const p = ev as PointerEvent;
-        p.preventDefault();
-        this.hitArea.focus();
-        this.ctx.emit({ t: 'canvasPointer', clientX: p.clientX, clientY: p.clientY });
-      }),
-      on(this.hitArea, 'keydown', (ev) => {
-        const k = ev as KeyboardEvent;
-        if (k.key !== ' ' && k.key !== 'Enter' && k.key !== 'Spacebar') return;
-        if (k.ctrlKey || k.metaKey || k.altKey || k.repeat) return;
-        k.preventDefault(); // suppress the synthetic click that would double-fire
-        this.ctx.emit({ t: 'canvasKey' });
-      }),
-    );
-
-    this.incidentsHost = el('div', {
-      cls: 'tm-incidents',
-      tid: TID.incidentBanner,
-      parent: this.stage,
-      attrs: { 'aria-live': 'polite', 'aria-label': 'Active incidents' },
-    });
-    this.incidentsHide = new Hide(this.incidentsHost);
-    this.incidentsHide.set(true);
-    this.incidentRows = new KeyedRows<IncidentRow>(
-      this.incidentsHost,
-      (id) => this.makeIncident(id),
-      (r) => r.el,
-    );
-
-    // ---- active cards ----------------------------------------------------
-    this.cardsHost = el('ul', {
-      cls: 'tm-cards',
-      tid: TID.activeCards,
-      parent: this.el,
-      attrs: { 'aria-label': 'Permanent upgrades and cards in play' },
-    });
-    this.cardRows = new KeyedRows<CardChip>(
-      this.cardsHost,
-      (id) => this.makeChip(id),
-      (r) => r.el,
-    );
+  /** S, or a click: report or claim, whichever the button currently says. */
+  pressReport(): void {
+    if (this.reportBtn.disabled || this.action === null) return;
+    this.ctx.emit({ t: this.action });
   }
 
   /** Called by the shop on hover/focus of an affordable purchase row. */
@@ -286,203 +423,123 @@ export class Hud {
     this.previewCost = cost;
   }
 
-  /** New run: stop the wallet counting up from the previous run's balance. */
+  /** Whether /compact exists in this save (the Training unlock). */
+  setCompactUnlocked(on_: boolean): void {
+    this.compactUnlocked = on_;
+  }
+
+  /** New run: stop the wallet counting from the previous run's balance. */
   reset(): void {
     this.roll.reset();
     this.previewCost = null;
+    this.sycRef = 0;
   }
 
-  update(run: RunState, d: DerivedStats, meta: MetaState): void {
+  update(run: RunState, d: DerivedStats, _meta: MetaState): void {
     const now = this.ctx.now();
+    const running = run.phase === 'running';
 
-    // wallet
-    const shown = this.roll.step(run.slop, now);
-    this.slop.set(fmtNum(shown));
-    this.slopLabel.set(slopUnitName(shown).toUpperCase());
-    // Rate is slop *per second* — that trailing S is the whole FLOPS joke, so
-    // there is deliberately no "/s" after it.
-    this.rate.set(formatSlops(d.idleRate));
-    this.click.set(`+${fmtNum(d.clickPower)}/click`);
-    // Incident rate is the risk dial the player is actively trading against,
-    // so it belongs on screen rather than buried in upgrade blurbs.
-    const risk = d.incidentRateMult;
-    this.risk.set(`RISK ×${risk.toFixed(2)}`);
-    this.riskFlag.set(risk > 1.05);
-
-    const pct = (v: number): string => `${Math.round(v * 100)}%`;
+    // ---- wallet -----------------------------------------------------------
+    this.tokens.set(formatTokens(this.roll.step(run.tokens, now)));
+    this.rate.set(`${fmtRate(d.idleRate)} TOK/S`);
+    this.click.set(`+${fmtRate(d.clickPower)}/CLICK`);
     const critUp = d.critChance > BALANCE.CRIT_CHANCE + 1e-9;
     this.critHide.set(!critUp && d.oneShotChance <= 0);
     this.crit.set(
       d.oneShotChance > 0
-        ? `CRIT ${pct(d.critChance)} · 1-SHOT ${pct(d.oneShotChance)}`
-        : `CRIT ${pct(d.critChance)}`,
+        ? `CRIT ${fmtPct(d.critChance)} · 1-SHOT ${fmtPct(d.oneShotChance)}`
+        : `CRIT ${fmtPct(d.critChance)}`,
+    );
+    this.risk.set(`RISK ${fmtMult(d.incidentRateMult)}`);
+    this.riskHot.set(d.incidentRateMult > 1.05);
+
+    // ---- prompt -----------------------------------------------------------
+    this.promptNum.set(promptLabel(run.promptIndex));
+    this.promptText.set(`"${promptAt(run.promptIndex).text}"`);
+    this.model.set(d.modelVersion);
+
+    // ---- context ----------------------------------------------------------
+    const fill = d.contextFill;
+    this.ctxFillW.set(barWidth(fill));
+    this.ctxAmber.set(fill >= CONTEXT_AMBER_AT && fill < CONTEXT_RED_AT);
+    this.ctxRed.set(fill >= CONTEXT_RED_AT);
+    this.ctxAria.set(String(Math.round(fill * 100)));
+    this.ctxAriaText.set(`${formatContext(run.context)} of ${formatContext(d.contextMax)}`);
+    const floorFrac = d.contextMax > 0 ? d.contextFloor / d.contextMax : 0;
+    this.ctxFloorHide.set(!(floorFrac > 0));
+    this.ctxFloorW.set(barWidth(floorFrac));
+    const pausing = run.compactingMs > 0;
+    this.ctxBusy.set(pausing || run.phase === 'compacting');
+    this.ctxText.set(`${formatContext(run.context)} / ${formatContext(d.contextMax)}`);
+    const soon = running && !pausing && d.secondsToCompaction <= COMPACTION_HINT_S;
+    this.ctxEtaHide.set(!soon);
+    this.ctxEta.set(soon ? `full in ${fmtSeconds(d.secondsToCompaction)}` : '');
+
+    // Visible once Training has unlocked it (or the sim says it is usable,
+    // which it only can be once unlocked); disabled through the pause.
+    this.compactHide.set(!(this.compactUnlocked || d.canCompact));
+    this.compactDis.set(!(d.canCompact && running && !pausing));
+    this.compactSub.set(`keep ${fmtPct(d.compactKeepManual)}`);
+
+    // ---- patience ---------------------------------------------------------
+    const pp = d.patienceProgress;
+    this.patFillW.set(barWidth(pp));
+    this.patAria.set(String(Math.round(pp * 100)));
+    this.patText.set(fmtClock(run.patienceMs));
+    this.patFrozen.set(d.patienceFrozen);
+    this.patLabel.set(d.patienceFrozen ? 'HUMAN PATIENCE · PAUSED' : 'HUMAN PATIENCE');
+    this.patLow.set(
+      running && !d.patienceFrozen && run.patienceMs <= BALANCE.WARN_AT_SECONDS * 1000,
     );
 
-    // project
-    const idx = run.projectIndex;
-    this.projNum.set(
-      idx < PROJECT_NAMES.length ? `PROJECT ${idx + 1}/${PROJECT_NAMES.length}` : `PROJECT ${idx + 1}`,
-    );
-    this.projName.set(projectAt(idx).name);
-    this.requirement.set(`${fmtNum(run.slop)} / ${fmtNum(d.requirement)}`);
-    this.eta.set(
-      d.shipBlockedBy !== null
-        ? 'BLOCKED'
-        : d.canShip
-          ? 'READY'
-          : `ETA ${fmtEta(d.etaSeconds)}`,
-    );
+    // ---- sycophancy: shows the next press's worth and fades with it --------
+    const power = Math.max(0, d.sycophancyPower);
+    if (power > this.sycRef) this.sycRef = power;
+    const strength = this.sycRef > 0 ? power / this.sycRef : 1;
+    // Quantised, so the cooling heat does not write a new style every frame.
+    this.sycFade.set((Math.round(strength * 20) / 20).toFixed(2));
+    this.sycSpent.set(strength < 0.3);
+    this.sycPower.set(fmtGain(power));
+    this.sycDis.set(!running);
 
-    // ship bar
-    const p = d.shipProgress;
-    this.shipFillW.set(barWidth(p));
-    this.shipReady.set(d.canShip);
-    this.shipAria.set(String(Math.round(p * 100)));
+    // ---- report -----------------------------------------------------------
+    const view = reportView(d, run.phase);
+    this.action = view.disabled ? null : view.action;
+    this.reportTxt.set(view.label);
+    this.reportState.set(view.state);
+    this.reportAria.set(view.aria);
+    this.reportDis.set(view.disabled);
+    const claimFace = view.state === 'claim';
+    this.verifyHide.set(!claimFace);
+    this.verify.set(claimFace ? view.sub : '');
+    this.reportSubHide.set(claimFace || view.sub === '');
+    this.reportSub.set(claimFace ? '' : view.sub);
 
-    // ghost segment: what this purchase would eat off the bar
+    const p = d.reportProgress;
+    this.reqFillW.set(barWidth(p));
+    this.reqAria.set(String(Math.round(p * 100)));
+    this.reqReady.set(view.state === 'report');
+    this.reqClaimLeft.set(barWidth(d.claimThreshold));
+    this.reqText.set(`${formatTokens(run.tokens)} / ${formatTokens(d.requirement)}`);
     const cost = this.previewCost;
     if (cost !== null && cost > 0 && d.requirement > 0) {
-      const after = Math.max(0, (run.slop - cost) / d.requirement);
+      const after = Math.max(0, (run.tokens - cost) / d.requirement);
       this.ghostLeft.set(barWidth(after));
       this.ghostWidth.set(barWidth(Math.max(0, p - after)));
-      this.previewOn.set(true);
+      this.ghostOn.set(true);
     } else {
-      this.previewOn.set(false);
+      this.ghostOn.set(false);
     }
 
-    // deadline
-    const dp = d.deadlineProgress;
-    this.dlFillW.set(barWidth(dp));
-    this.dlAria.set(String(Math.round(dp * 100)));
-    this.dlWarn.set(dp <= WARN_AT && dp > CRIT_AT);
-    this.dlCrit.set(dp <= CRIT_AT);
-    this.dlFlash.set(run.timeLeftMs <= FLASH_SECONDS * 1000 && run.phase === 'running');
-    this.deadlineText.set(fmtTime(run.timeLeftMs));
-
-    // demos
-    this.demoTally.set(`◈ ${fmtInt(d.demosIfEndedNow)}`);
-
-    // ship button
-    this.shipDis.set(!(d.canShip && run.phase === 'running'));
-    // Say *why* the deploy is refused — an outage looks like a bug otherwise.
-    this.shipTxt.set(d.shipBlockedBy !== null ? 'CANNOT SHIP' : 'SHIP IT');
-    this.shipBlocked.set(d.shipBlockedBy !== null);
-    this.shipLabel.set(
-      d.shipBlockedBy !== null ? `Cannot ship: ${d.shipBlockedBy}` : 'Ship the current project',
-    );
-
-    this.syncIncidents(run);
-    this.syncCards(run, meta);
+    // ---- tally ------------------------------------------------------------
+    this.thumbs.set(formatInt(d.thumbsIfEndedNow));
+    this.debtHide.set(!(run.techDebt > 0));
+    this.debt.set(run.techDebt > 0 ? `TECH DEBT ${formatInt(run.techDebt)}` : '');
   }
 
   destroy(): void {
     for (const d of this.disposers) d();
     this.disposers.length = 0;
-    this.incidentRows.clear();
-    this.cardRows.clear();
     this.el.remove();
-  }
-
-  // -------------------------------------------------------------------------
-
-  private syncIncidents(run: RunState): void {
-    const list = run.incidents;
-    this.incidentIds.length = 0;
-    for (const inc of list) {
-      // Defensive: a duplicate id would make the keyed reconciler thrash.
-      if (!this.incidentIds.includes(inc.id)) this.incidentIds.push(inc.id);
-    }
-    this.incidentRows.sync(this.incidentIds);
-    this.incidentsHide.set(list.length === 0);
-
-    for (const inc of list) {
-      const row = this.incidentRows.rows.get(inc.id);
-      if (row === undefined) continue;
-      row.timer.set(fmtShortTime(inc.remainingMs));
-      const clicks = inc.clicksRemaining;
-      const needsClicks = Number.isFinite(clicks) && clicks > 0;
-      row.clicksHide.set(!needsClicks);
-      // Cleared rather than just hidden: `hidden` text still shows up in
-      // textContent, and a stale "click x4 to fix" would read as a live cue.
-      row.clicks.set(needsClicks ? `click ×${fmtInt(clicks)} to fix` : '');
-    }
-  }
-
-  private makeIncident(id: string): IncidentRow {
-    const def = INCIDENT_BY_ID[id];
-    const good = def?.tone === 'good';
-    const node = el('div', {
-      cls: `tm-incident${good ? ' tm-incident--good' : ''}`,
-    });
-    el('span', {
-      cls: 'tm-incident__name',
-      tid: TID.incidentName,
-      text: def?.name ?? id,
-      parent: node,
-    });
-    el('span', { cls: 'tm-incident__flavor', text: def?.flavor ?? '', parent: node });
-    const clicksNode = el('span', { cls: 'tm-incident__clicks', parent: node });
-    const clicksHide = new Hide(clicksNode);
-    clicksHide.set(true);
-    const timer = new Txt(
-      el('span', { cls: 'tm-incident__timer', tid: TID.incidentTimer, parent: node }),
-    );
-    return { el: node, timer, clicks: new Txt(clicksNode), clicksHide };
-  }
-
-  /**
-   * Permanent tree buffs first, then this run's cards.
-   *
-   * The levelled meta upgrades are live modifiers exactly like a card, and they
-   * were invisible during a run — you could feel Cracked working and have
-   * nothing on screen saying so. Only `kind: 'upgrade'` nodes appear: `unlock`
-   * nodes add *content* rather than a modifier, and fifteen "unlocked X" chips
-   * would bury the cards.
-   *
-   * Keyed by level as well as id, so raising a level rebuilds the chip instead
-   * of leaving a stale description behind.
-   */
-  private syncCards(run: RunState, meta: MetaState): void {
-    this.chipKeys.length = 0;
-    for (const def of META_UPGRADES) {
-      if (def.kind !== 'upgrade') continue;
-      const level = meta.levels[def.id] ?? 0;
-      if (level > 0) this.chipKeys.push(`meta:${def.id}:${level}`);
-    }
-    for (const id of run.cards) this.chipKeys.push(id);
-    this.cardRows.sync(this.chipKeys);
-  }
-
-  private makeChip(key: string): CardChip {
-    if (key.startsWith('meta:')) return this.makeMetaChip(key);
-    const id = key;
-    const def = CARD_BY_ID[id];
-    const li = el('li', { attrs: { role: 'listitem' } });
-    const chip = btn({
-      cls: `tm-chip tm-chip--${def?.rarity ?? 'common'}`,
-      text: def?.name ?? id,
-      tid: tid('active-card', id),
-      parent: li,
-      label: `${def?.name ?? id}: ${def?.blurb ?? ''}`,
-    });
-    el('span', { cls: 'tm-chip__tip', text: def?.blurb ?? '', parent: chip });
-    return { el: li };
-  }
-
-  private makeMetaChip(key: string): CardChip {
-    const [, id, lvl] = key.split(':');
-    const def = META_BY_ID[id ?? ''];
-    const level = Number(lvl ?? 0);
-    const li = el('li', { attrs: { role: 'listitem' } });
-    const what = def ? def.describe(level) : '';
-    const chip = btn({
-      cls: 'tm-chip tm-chip--meta',
-      text: def?.name ?? (id ?? ''),
-      tid: tid('active-meta', id ?? ''),
-      parent: li,
-      label: `${def?.name ?? id}, permanent: ${what}`,
-    });
-    el('span', { cls: 'tm-chip__tip', text: what, parent: chip });
-    return { el: li };
   }
 }

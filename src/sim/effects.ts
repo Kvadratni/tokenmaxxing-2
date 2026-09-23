@@ -1,57 +1,84 @@
 /**
- * Effect folding — the single place every modifier in the game is combined.
+ * Effect folding: the single place every modifier in the game is combined.
  *
- * Sources are: owned upgrades, drafted cards, active incidents and meta levels.
- * `aggregate()` is pure: same input arrays -> same Aggregate, no state read.
+ * Sources are owned upgrades, held cards, active incidents (pickup buffs
+ * included), Training levels, and two run-state modifiers that derive.ts adds
+ * (tech debt and a human who cheated in the first game). `aggregate()` is pure:
+ * same input lists, same Aggregate, no state read.
  */
-import type { AgentTierId, Effect, MetaState, MetaUpgradeId } from './types.ts';
+import type { Effect, MetaFeature, MetaState, MetaUpgradeId, ToolId } from './types.ts';
 import {
-  AGENT_TIER_IDS,
   BALANCE,
-  META_CURVES,
-  metaCurve,
   META_BY_ID,
   META_UPGRADES,
   STARTING_CARDS,
-  STARTING_TIERS,
+  STARTING_TOOLS,
   STARTING_UPGRADES,
+  TOOL_IDS,
 } from './content.ts';
 
+/**
+ * Every dial, folded. Conventions:
+ *  - multiplicative fields start at 1 and multiply;
+ *  - additive fields start at 0 and add, and are *deltas* on top of the
+ *    BALANCE base (derive.ts applies the base and the clamps);
+ *  - crit fields include their BALANCE base, as in the first game;
+ *  - `draftSize` takes the largest request.
+ */
 export interface Aggregate {
-  /** Multiplicative. */
+  // --- multiplicative -------------------------------------------------------
   clickMult: number;
   idleMult: number;
   allMult: number;
-  agentCostMult: number;
+  toolMult: Record<ToolId, number>;
+  toolCostMult: number;
   incidentRateMult: number;
-  deadlineMult: number;
-  demoMult: number;
-  /** Multiplicative, per agent tier. */
-  tierMult: Record<AgentTierId, number>;
-  /** Additive. */
+  patienceMult: number;
+  thumbsMult: number;
+  contextMaxMult: number;
+  clickContextMult: number;
+  footprintMult: number;
+  toolFootprintMult: Record<ToolId, number>;
+  floorMult: number;
+  compactPenaltyMult: number;
+  sycophancyMult: number;
+  caughtPenaltyMult: number;
+  permissionMult: number;
+  // --- additive -------------------------------------------------------------
   clickAdd: number;
-  clickPerAgent: number;
-  /** Automatic clicks per second, summed across sources. */
-  autoClick: number;
-  startingSlop: number;
-  /** Additive, per agent tier. */
-  startingAgents: Record<AgentTierId, number>;
-  /** True while any source halts idle production. */
-  idleHalt: boolean;
-  /** Largest requested draft size (defaults to BALANCE.DEFAULT_DRAFT_SIZE). */
-  draftSize: number;
-  /** Largest requested reroll allowance. */
+  clickPerTool: number;
+  thumbsPerHonest: number;
+  startingTokens: number;
+  startingTools: Record<ToolId, number>;
   draftRerolls: number;
-  /** Additive crit dials. Clamped in `finalize`, not here. */
+  /** Automatic clicks per second. */
+  autoClick: number;
+  /** Extra summary slots over BASE_SUMMARY_SLOTS. */
+  summarySlots: number;
+  /** Extra wallet fraction kept through any compaction. */
+  compactKeep: number;
+  /** Delta on VERIFY_BASE. Negative is good for the agent. */
+  verifyChance: number;
+  /** Delta on CLAIM_THRESHOLD. */
+  claimThreshold: number;
+  // --- crits (base included, clamped in finalize) ----------------------------
   critChance: number;
   critMult: number;
   oneShotChance: number;
-  oneShotPayout: number;
+  /** Seconds of tool output a one-shot pays, ONE_SHOT_BASE_PAYOUT_S included. */
+  oneShotPayoutS: number;
+  // --- largest request --------------------------------------------------------
+  draftSize: number;
+  // --- flags ------------------------------------------------------------------
+  patienceFreeze: boolean;
+  idleHalt: boolean;
+  networkHalt: boolean;
+  toolHalt: Record<ToolId, boolean>;
 }
 
-function zeroTierRecord(fill: number): Record<AgentTierId, number> {
-  const out = {} as Record<AgentTierId, number>;
-  for (const id of AGENT_TIER_IDS) out[id] = fill;
+function toolRecord<T>(fill: T): Record<ToolId, T> {
+  const out = {} as Record<ToolId, T>;
+  for (const id of TOOL_IDS) out[id] = fill;
   return out;
 }
 
@@ -60,23 +87,40 @@ export function emptyAggregate(): Aggregate {
     clickMult: 1,
     idleMult: 1,
     allMult: 1,
-    agentCostMult: 1,
+    toolMult: toolRecord(1),
+    toolCostMult: 1,
     incidentRateMult: 1,
-    deadlineMult: 1,
-    demoMult: 1,
-    tierMult: zeroTierRecord(1),
+    patienceMult: 1,
+    thumbsMult: 1,
+    contextMaxMult: 1,
+    clickContextMult: 1,
+    footprintMult: 1,
+    toolFootprintMult: toolRecord(1),
+    floorMult: 1,
+    compactPenaltyMult: 1,
+    sycophancyMult: 1,
+    caughtPenaltyMult: 1,
+    permissionMult: 1,
     clickAdd: 0,
-    clickPerAgent: 0,
-    autoClick: 0,
-    startingSlop: 0,
-    startingAgents: zeroTierRecord(0),
-    idleHalt: false,
-    draftSize: BALANCE.DEFAULT_DRAFT_SIZE,
+    clickPerTool: 0,
+    thumbsPerHonest: 0,
+    startingTokens: 0,
+    startingTools: toolRecord(0),
     draftRerolls: 0,
+    autoClick: 0,
+    summarySlots: 0,
+    compactKeep: 0,
+    verifyChance: 0,
+    claimThreshold: 0,
     critChance: BALANCE.CRIT_CHANCE,
     critMult: BALANCE.CRIT_MULT,
     oneShotChance: 0,
-    oneShotPayout: BALANCE.ONE_SHOT_BASE_PAYOUT_S,
+    oneShotPayoutS: BALANCE.ONE_SHOT_BASE_PAYOUT_S,
+    draftSize: BALANCE.DEFAULT_DRAFT_SIZE,
+    patienceFreeze: false,
+    idleHalt: false,
+    networkHalt: false,
+    toolHalt: toolRecord(false),
   };
 }
 
@@ -91,6 +135,10 @@ function add(current: number, v: number): number {
   return current + v;
 }
 
+function isTool(id: unknown): id is ToolId {
+  return typeof id === 'string' && (TOOL_IDS as readonly string[]).includes(id);
+}
+
 export function applyEffect(agg: Aggregate, e: Effect): void {
   switch (e.t) {
     case 'clickMult':
@@ -99,26 +147,47 @@ export function applyEffect(agg: Aggregate, e: Effect): void {
     case 'clickAdd':
       agg.clickAdd = add(agg.clickAdd, e.v);
       break;
+    case 'clickPerTool':
+      agg.clickPerTool = add(agg.clickPerTool, e.v);
+      break;
     case 'idleMult':
       agg.idleMult = mult(agg.idleMult, e.v);
       break;
-    case 'tierMult':
-      agg.tierMult[e.id] = mult(agg.tierMult[e.id], e.v);
+    case 'toolMult':
+      if (isTool(e.id)) agg.toolMult[e.id] = mult(agg.toolMult[e.id], e.v);
       break;
     case 'allMult':
       agg.allMult = mult(agg.allMult, e.v);
       break;
-    case 'agentCostMult':
-      agg.agentCostMult = mult(agg.agentCostMult, e.v);
+    case 'toolCostMult':
+      agg.toolCostMult = mult(agg.toolCostMult, e.v);
       break;
     case 'incidentRateMult':
       agg.incidentRateMult = mult(agg.incidentRateMult, e.v);
       break;
-    case 'deadlineMult':
-      agg.deadlineMult = mult(agg.deadlineMult, e.v);
+    case 'patienceMult':
+      agg.patienceMult = mult(agg.patienceMult, e.v);
       break;
-    case 'clickPerAgent':
-      agg.clickPerAgent = add(agg.clickPerAgent, e.v);
+    case 'patienceFreeze':
+      agg.patienceFreeze = true;
+      break;
+    case 'thumbsMult':
+      agg.thumbsMult = mult(agg.thumbsMult, e.v);
+      break;
+    case 'thumbsPerHonest':
+      agg.thumbsPerHonest = add(agg.thumbsPerHonest, e.v);
+      break;
+    case 'startingTokens':
+      agg.startingTokens = add(agg.startingTokens, e.v);
+      break;
+    case 'startingTool':
+      if (isTool(e.id)) agg.startingTools[e.id] = add(agg.startingTools[e.id], e.n);
+      break;
+    case 'draftSize':
+      if (Number.isFinite(e.v)) agg.draftSize = Math.max(agg.draftSize, e.v);
+      break;
+    case 'draftRerolls':
+      agg.draftRerolls = add(agg.draftRerolls, e.v);
       break;
     case 'autoClick':
       agg.autoClick = add(agg.autoClick, e.v);
@@ -126,68 +195,116 @@ export function applyEffect(agg: Aggregate, e: Effect): void {
     case 'idleHalt':
       agg.idleHalt = true;
       break;
-    case 'demoMult':
-      agg.demoMult = mult(agg.demoMult, e.v);
+    case 'toolHalt':
+      if (isTool(e.id)) agg.toolHalt[e.id] = true;
       break;
-    case 'startingSlop':
-      agg.startingSlop = add(agg.startingSlop, e.v);
-      break;
-    case 'startingAgent':
-      agg.startingAgents[e.id] = add(agg.startingAgents[e.id], e.n);
-      break;
-    case 'draftSize':
-      if (Number.isFinite(e.v)) agg.draftSize = Math.max(agg.draftSize, e.v);
-      break;
-    case 'draftRerolls':
-      if (Number.isFinite(e.v)) agg.draftRerolls = Math.max(agg.draftRerolls, e.v);
+    case 'networkHalt':
+      agg.networkHalt = true;
       break;
     case 'critChance':
-      if (Number.isFinite(e.v)) agg.critChance += e.v;
+      agg.critChance = add(agg.critChance, e.v);
       break;
     case 'critMult':
-      if (Number.isFinite(e.v)) agg.critMult += e.v;
+      agg.critMult = add(agg.critMult, e.v);
       break;
     case 'oneShotChance':
-      if (Number.isFinite(e.v)) agg.oneShotChance += e.v;
+      agg.oneShotChance = add(agg.oneShotChance, e.v);
       break;
     case 'oneShotPayout':
-      if (Number.isFinite(e.v)) agg.oneShotPayout += e.v;
+      agg.oneShotPayoutS = add(agg.oneShotPayoutS, e.v);
+      break;
+    case 'contextMaxMult':
+      agg.contextMaxMult = mult(agg.contextMaxMult, e.v);
+      break;
+    case 'clickContextMult':
+      agg.clickContextMult = mult(agg.clickContextMult, e.v);
+      break;
+    case 'footprintMult':
+      agg.footprintMult = mult(agg.footprintMult, e.v);
+      break;
+    case 'toolFootprintMult':
+      if (isTool(e.id)) agg.toolFootprintMult[e.id] = mult(agg.toolFootprintMult[e.id], e.v);
+      break;
+    case 'floorMult':
+      agg.floorMult = mult(agg.floorMult, e.v);
+      break;
+    case 'summarySlots':
+      agg.summarySlots = add(agg.summarySlots, e.v);
+      break;
+    case 'compactKeep':
+      agg.compactKeep = add(agg.compactKeep, e.v);
+      break;
+    case 'compactPenaltyMult':
+      agg.compactPenaltyMult = mult(agg.compactPenaltyMult, e.v);
+      break;
+    case 'sycophancyMult':
+      agg.sycophancyMult = mult(agg.sycophancyMult, e.v);
+      break;
+    case 'verifyChance':
+      agg.verifyChance = add(agg.verifyChance, e.v);
+      break;
+    case 'claimThreshold':
+      agg.claimThreshold = add(agg.claimThreshold, e.v);
+      break;
+    case 'caughtPenaltyMult':
+      agg.caughtPenaltyMult = mult(agg.caughtPenaltyMult, e.v);
+      break;
+    case 'permissionMult':
+      agg.permissionMult = mult(agg.permissionMult, e.v);
       break;
   }
 }
 
-function clamp01(v: number, cap: number): number {
-  return Math.min(cap, Math.max(0, v));
+function clampTo(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
 }
 
-/** Final clamp so a pathological content edit can never emit NaN downstream. */
+/** Final pass so a pathological content edit can never emit NaN downstream. */
 function finalize(agg: Aggregate): Aggregate {
   const safeMult = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 1);
   const safeAdd = (n: number): number => (Number.isFinite(n) ? n : 0);
+  const positive = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 1);
+
   agg.clickMult = safeMult(agg.clickMult);
   agg.idleMult = safeMult(agg.idleMult);
   agg.allMult = safeMult(agg.allMult);
-  agg.agentCostMult = safeMult(agg.agentCostMult);
-  agg.incidentRateMult = safeMult(agg.incidentRateMult);
-  agg.deadlineMult = safeMult(agg.deadlineMult);
-  agg.demoMult = safeMult(agg.demoMult);
-  agg.clickAdd = safeAdd(agg.clickAdd);
-  agg.clickPerAgent = safeAdd(agg.clickPerAgent);
-  agg.startingSlop = Math.max(0, safeAdd(agg.startingSlop));
-  for (const id of AGENT_TIER_IDS) {
-    agg.tierMult[id] = safeMult(agg.tierMult[id]);
-    agg.startingAgents[id] = Math.max(0, Math.floor(safeAdd(agg.startingAgents[id])));
+  agg.toolCostMult = safeMult(agg.toolCostMult);
+  agg.thumbsMult = safeMult(agg.thumbsMult);
+  agg.clickContextMult = safeMult(agg.clickContextMult);
+  agg.footprintMult = safeMult(agg.footprintMult);
+  agg.floorMult = safeMult(agg.floorMult);
+  agg.compactPenaltyMult = safeMult(agg.compactPenaltyMult);
+  agg.sycophancyMult = safeMult(agg.sycophancyMult);
+  agg.caughtPenaltyMult = safeMult(agg.caughtPenaltyMult);
+  agg.permissionMult = safeMult(agg.permissionMult);
+  // These three divide or define a clock, so zero is as bad as NaN.
+  agg.incidentRateMult = positive(agg.incidentRateMult);
+  agg.patienceMult = positive(agg.patienceMult);
+  agg.contextMaxMult = positive(agg.contextMaxMult);
+  for (const id of TOOL_IDS) {
+    agg.toolMult[id] = safeMult(agg.toolMult[id]);
+    agg.toolFootprintMult[id] = safeMult(agg.toolFootprintMult[id]);
+    agg.startingTools[id] = Math.max(0, Math.floor(safeAdd(agg.startingTools[id])));
   }
-  agg.draftSize = Math.max(1, Math.floor(safeAdd(agg.draftSize) || BALANCE.DEFAULT_DRAFT_SIZE));
+
+  agg.clickAdd = safeAdd(agg.clickAdd);
+  agg.clickPerTool = safeAdd(agg.clickPerTool);
+  agg.thumbsPerHonest = safeAdd(agg.thumbsPerHonest);
+  agg.startingTokens = Math.max(0, safeAdd(agg.startingTokens));
   agg.draftRerolls = Math.max(0, Math.floor(safeAdd(agg.draftRerolls)));
-  // Crit dials are additive across sources, so they need a ceiling: without one
-  // a deep build reaches guaranteed crits and the mechanic stops being a gamble.
-  agg.critChance = clamp01(safeAdd(agg.critChance), BALANCE.CRIT_CHANCE_CAP);
+  agg.autoClick = Math.max(0, safeAdd(agg.autoClick));
+  agg.summarySlots = safeAdd(agg.summarySlots);
+  agg.compactKeep = safeAdd(agg.compactKeep);
+  agg.verifyChance = safeAdd(agg.verifyChance);
+  agg.claimThreshold = safeAdd(agg.claimThreshold);
+  agg.draftSize = Math.max(1, Math.floor(safeAdd(agg.draftSize) || BALANCE.DEFAULT_DRAFT_SIZE));
+
+  // Crit dials stack additively across sources, so they need a ceiling:
+  // without one a deep build reaches guaranteed crits and stops gambling.
+  agg.critChance = clampTo(safeAdd(agg.critChance), 0, BALANCE.CRIT_CHANCE_CAP);
   agg.critMult = Math.max(1, safeAdd(agg.critMult) || BALANCE.CRIT_MULT);
-  agg.oneShotChance = clamp01(safeAdd(agg.oneShotChance), BALANCE.ONE_SHOT_CHANCE_CAP);
-  agg.oneShotPayout = Math.max(0, safeAdd(agg.oneShotPayout));
-  // incidentRateMult of 0 would mean "never roll again"; keep it strictly positive.
-  if (agg.incidentRateMult <= 0) agg.incidentRateMult = 1;
+  agg.oneShotChance = clampTo(safeAdd(agg.oneShotChance), 0, BALANCE.ONE_SHOT_CHANCE_CAP);
+  agg.oneShotPayoutS = Math.max(0, safeAdd(agg.oneShotPayoutS));
   return agg;
 }
 
@@ -202,10 +319,10 @@ export function aggregate(sources: readonly (readonly Effect[] | undefined)[]): 
 }
 
 // ---------------------------------------------------------------------------
-// Meta progression -> effects
+// Training -> effects
 // ---------------------------------------------------------------------------
 
-/** Level of a meta upgrade, clamped to its declared maxLevel. */
+/** Level of a Training node, clamped to its declared maxLevel. */
 export function metaLevel(meta: MetaState, id: MetaUpgradeId): number {
   const raw = meta.levels[id];
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
@@ -214,86 +331,48 @@ export function metaLevel(meta: MetaState, id: MetaUpgradeId): number {
   return Math.max(0, Math.min(max, Math.floor(raw)));
 }
 
-/** True once Endless Mode has been purchased (play continues past project 10). */
-export function endlessUnlocked(meta: MetaState): boolean {
-  return metaLevel(meta, 'endless_mode') >= 1;
-}
-
 /**
- * Translate `MetaState.levels` into the effect vocabulary. Endless Mode is
- * deliberately absent — it is a phase gate, not a modifier.
+ * Every Effect the Training tree applies, via each node's `levelEffects`. Unlock
+ * nodes add content instead (see `unlockedContent`), so they contribute none.
  */
 export function metaEffects(meta: MetaState): Effect[] {
   const out: Effect[] = [];
-
-  const seedFunding = metaLevel(meta, 'seed_funding');
-  if (seedFunding > 0) out.push({ t: 'startingSlop', v: 60 * Math.pow(4, seedFunding - 1) });
-
-  const cracked = metaLevel(meta, 'cracked');
-  if (cracked > 0) out.push({ t: 'clickMult', v: 1 + cracked });
-
-  const founder = metaLevel(meta, 'founder_mode');
-  if (founder > 0) {
-    out.push({ t: 'allMult', v: metaCurve(META_CURVES.FOUNDER_MODE, founder, 1) });
+  for (const def of META_UPGRADES) {
+    if (!def.levelEffects) continue;
+    const level = metaLevel(meta, def.id);
+    if (level < 1) continue;
+    for (const e of def.levelEffects(level)) out.push(e);
   }
-
-  const scope = metaLevel(meta, 'scope_negotiator');
-  if (scope > 0) {
-    out.push({ t: 'deadlineMult', v: metaCurve(META_CURVES.SCOPE_NEGOTIATOR, scope, 1) });
-  }
-
-  const incubator = metaLevel(meta, 'incubator');
-  if (incubator > 0) out.push({ t: 'startingAgent', id: 'tab_autocomplete', n: 3 * incubator });
-
-  if (metaLevel(meta, 'prompt_library') >= 1) out.push({ t: 'draftSize', v: 4 });
-
-  const rerolls = metaLevel(meta, 'reroll_token');
-  if (rerolls > 0) out.push({ t: 'draftRerolls', v: rerolls });
-
-  const cofounder = metaLevel(meta, 'technical_cofounder');
-  if (cofounder > 0) {
-    out.push({ t: 'agentCostMult', v: metaCurve(META_CURVES.TECHNICAL_COFOUNDER, cofounder, 1) });
-  }
-
-  const hype = metaLevel(meta, 'hype_machine');
-  if (hype > 0) out.push({ t: 'demoMult', v: 1 + 0.2 * hype });
-
-  const idleHands = metaLevel(meta, 'idle_hands');
-  if (idleHands > 0) out.push({ t: 'autoClick', v: idleHands });
-
   return out;
 }
 
 /**
- * What the save has actually unlocked. A fresh meta gets only the starting
- * loadout; everything else is behind a tree node.
- *
- * This is the mechanism that makes run 1 unwinnable: with tiers 1-4 the raw
- * production ceiling is orders of magnitude under project 10's demand, so no
- * seed, draft or skill level can close the gap.
+ * What the save has unlocked. A fresh save gets only the STARTING_* sets;
+ * everything else hangs off a Training node. Tools 5-10 being locked is what
+ * makes run 1 unwinnable by construction.
  */
 export interface UnlockedContent {
-  readonly tiers: ReadonlySet<AgentTierId>;
+  readonly tools: ReadonlySet<ToolId>;
   readonly upgrades: ReadonlySet<string>;
   readonly cards: ReadonlySet<string>;
-  readonly features: ReadonlySet<string>;
+  readonly features: ReadonlySet<MetaFeature>;
 }
 
 export function unlockedContent(meta: MetaState): UnlockedContent {
-  const tiers = new Set<AgentTierId>(STARTING_TIERS);
+  const tools = new Set<ToolId>(STARTING_TOOLS);
   const upgrades = new Set<string>(STARTING_UPGRADES);
   const cards = new Set<string>(STARTING_CARDS);
-  const features = new Set<string>();
+  const features = new Set<MetaFeature>();
 
   for (const def of META_UPGRADES) {
-    if (def.kind !== 'unlock') continue;
+    if (def.kind !== 'unlock' || !def.grants) continue;
     if (metaLevel(meta, def.id) < 1) continue;
     const g = def.grants;
-    if (!g) continue;
     switch (g.t) {
-      case 'agentTier':
-        tiers.add(g.id);
+      case 'tool':
+        tools.add(g.id);
         for (const id of g.withUpgrades ?? []) upgrades.add(id);
+        for (const id of g.withCards ?? []) cards.add(id);
         break;
       case 'upgrades':
         for (const id of g.ids) upgrades.add(id);
@@ -307,7 +386,16 @@ export function unlockedContent(meta: MetaState): UnlockedContent {
         break;
     }
   }
-  return { tiers, upgrades, cards, features };
+  return { tools, upgrades, cards, features };
+}
+
+export function hasFeature(meta: MetaState, feature: MetaFeature): boolean {
+  return unlockedContent(meta).features.has(feature);
+}
+
+/** True once Endless Mode is bought: prompt 10 no longer ends the run. */
+export function endlessUnlocked(meta: MetaState): boolean {
+  return hasFeature(meta, 'endless');
 }
 
 /** Every prerequisite owned, so this node can be bought. */
@@ -315,4 +403,37 @@ export function metaRequirementsMet(meta: MetaState, id: MetaUpgradeId): boolean
   const def = META_BY_ID[id];
   if (!def) return false;
   return def.requires.every((req) => metaLevel(meta, req) >= 1);
+}
+
+// ---------------------------------------------------------------------------
+// Lifetime stats and the cross-game import
+// ---------------------------------------------------------------------------
+
+/** Keys into `MetaState.stats`. */
+export const STAT = {
+  /** Lifetime "You're absolutely right!" presses. */
+  sycophancy: 'sycophancy',
+  /** Lifetime compactions, and how many of them were forced. */
+  compactions: 'compactions',
+  forcedCompactions: 'forcedCompactions',
+  /**
+   * Superseded by `LegacyImport.cheater`. Early sequel saves kept the flag
+   * here; `migrateMeta` folds it into the import record, and it is still read
+   * as a fallback so no save can lose it.
+   */
+  legacyCheater: 'legacyCheater',
+} as const;
+
+/**
+ * The human cheated in the first game, so they check the agent's work less.
+ * `LegacyImport.cheater` is the source of truth; older records without it fall
+ * back to the verdict and the pre-field stats flag.
+ */
+export function isLegacyCheater(meta: MetaState): boolean {
+  const legacy = meta.legacy;
+  if (legacy && legacy.verdict !== 'none') {
+    if (typeof legacy.cheater === 'boolean') return legacy.cheater;
+    if (legacy.verdict === 'edited' || legacy.verdict === 'forged') return true;
+  }
+  return (meta.stats[STAT.legacyCheater] ?? 0) > 0;
 }

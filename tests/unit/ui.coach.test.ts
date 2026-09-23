@@ -1,0 +1,85 @@
+/**
+ * First-run coach marks: the context bar, the human's patience, claims and
+ * compaction, each taught the moment it becomes true, once.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BALANCE, promptAt } from '../../src/sim/content.ts';
+import { TID, tid } from '../../src/testids.ts';
+import { COACH_TIP_MS, COACH_TIPS } from '../../src/ui/coach.ts';
+import { makeMeta, makeRun, mountUI, must, q, unmountAll } from './ui.fake-sim.ts';
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  unmountAll();
+  vi.useRealTimers();
+});
+
+const tipOn = (root: HTMLElement): string | null => {
+  const node = must(root, TID.coach).querySelector<HTMLElement>(`[data-testid^="${TID.coachTip}-"]`);
+  return node?.dataset['testid']?.slice(TID.coachTip.length + 1) ?? null;
+};
+
+/** Dismiss whatever is showing, then run a frame so the next tip can land. */
+function next(m: ReturnType<typeof mountUI>): string | null {
+  const id = tipOn(m.root);
+  if (id !== null) (must(m.root, tid(TID.coachDismiss, id)) as HTMLButtonElement).click();
+  m.frame();
+  return tipOn(m.root);
+}
+
+describe('coach marks', () => {
+  it('covers the four ideas game 1 did not have', () => {
+    const ids = COACH_TIPS.map((t) => t.id);
+    for (const id of ['context', 'patience', 'claim', 'compaction']) expect(ids).toContain(id);
+  });
+
+  it('starts by pointing at the agent', () => {
+    const m = mountUI();
+    expect(tipOn(m.root)).toBe('generate');
+    expect(must(m.root, tid(TID.coachTip, 'generate')).textContent).toContain('Space');
+  });
+
+  it('teaches each idea when it becomes true, once, in priority order', () => {
+    const m = mountUI();
+    expect(tipOn(m.root)).toBe('generate');
+    expect(next(m)).toBeNull();
+
+    m.sim.run.context = BALANCE.BASE_CONTEXT * 0.25;
+    expect(next(m)).toBe('context');
+
+    m.sim.run.patienceMs = promptAt(0).patienceMs * 0.5;
+    expect(next(m)).toBe('patience');
+
+    m.sim.run.tokens = 60; // CLAIM DONE, and a Grep is affordable too: tools first
+    expect(next(m)).toBe('tools');
+    expect(next(m)).toBe('claim');
+
+    m.sim.run.tokens = 100; // REPORT DONE
+    expect(next(m)).toBe('report');
+
+    m.sim.run.context = BALANCE.BASE_CONTEXT * 0.85;
+    expect(next(m)).toBe('compaction');
+    expect(must(m.root, tid(TID.coachTip, 'compaction')).textContent).toContain('compacted');
+
+    // Nothing is offered twice.
+    expect(next(m)).toBeNull();
+  });
+
+  it('retires a tip on its own after a few seconds', () => {
+    const m = mountUI();
+    expect(tipOn(m.root)).toBe('generate');
+    vi.advanceTimersByTime(COACH_TIP_MS + 10);
+    expect(tipOn(m.root)).toBeNull();
+  });
+
+  it('stays out of the way on any session after the first, and under dialogs', () => {
+    const later = mountUI({ meta: makeMeta({ runs: 1 }) });
+    expect(tipOn(later.root)).toBeNull();
+    unmountAll();
+    const m = mountUI({ run: makeRun({ phase: 'drafting', draftOffer: ['please', 'grandma', 'tip_200'] }) });
+    expect(q(m.root, tid(TID.coachTip, 'generate'))).toBeNull();
+  });
+});

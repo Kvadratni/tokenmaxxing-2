@@ -1,15 +1,24 @@
 /**
- * Draft modal. Opens on `phase === 'drafting'`, closes when the pick lands.
- * A pick is mandatory, so this dialog is explicitly NOT dismissable: Escape is
- * swallowed by `Modal` and there is no close affordance.
+ * The draft: "THE HUMAN IS PROMPT ENGINEERING".
+ *
+ * Opens on `phase === 'drafting'` and closes when the pick lands. A pick is
+ * mandatory, so the dialog is NOT dismissable: Escape is swallowed by `Modal`
+ * and there is no close button. Picking is two-step on purpose: a click (or
+ * the arrows) only highlights a card, CONFIRM commits it. The dialog opens
+ * with nothing highlighted, so a stray Enter right after reporting cannot lock
+ * in whichever card happened to have focus.
  */
 import { CARD_BY_ID } from '../sim/content.ts';
 import type { RunState } from '../sim/types.ts';
 import { TID, tid } from '../testids.ts';
-import { btn, Dis, el, Hide, KeyedRows, on, Txt } from './dom.ts';
+import { btn, Dis, el, KeyedRows, on, Txt } from './dom.ts';
+import { effectsLine } from './effect-text.ts';
+import { cardIcon } from './icon-ids.ts';
 import { iconEl } from './icon.ts';
 import { Modal } from './modal.ts';
 import type { UICtx } from './types.ts';
+
+export const DRAFT_TITLE = 'THE HUMAN IS PROMPT ENGINEERING';
 
 interface CardNode {
   el: HTMLButtonElement;
@@ -17,13 +26,12 @@ interface CardNode {
 
 export class Draft {
   readonly modal: Modal;
-  private readonly cardsHost: HTMLElement;
   private readonly cards: KeyedRows<CardNode>;
-  private readonly confirmBtn!: HTMLButtonElement;
-  private readonly confirmTxt!: Txt;
-  private readonly confirmDis!: Dis;
+  private readonly confirmBtn: HTMLButtonElement;
+  private readonly confirmTxt: Txt;
+  private readonly confirmDis: Dis;
   private readonly rerollBtn: HTMLButtonElement;
-  private readonly rerollHide: Hide;
+  private readonly rerollDis: Dis;
   private readonly rerollCount: Txt;
   private readonly disposers: Array<() => void> = [];
   private offer: string[] = [];
@@ -32,34 +40,42 @@ export class Draft {
   constructor(parent: HTMLElement, private readonly ctx: UICtx) {
     this.modal = new Modal({
       tid: TID.draftModal,
-      label: 'Draft a card',
+      label: 'The human is prompt engineering: pick a card',
       dismissable: false,
       cls: 'tm-draft',
     });
     parent.appendChild(this.modal.el);
 
-    el('h2', { cls: 'tm-modal__title', text: 'Pick one', parent: this.modal.panel });
+    el('h2', { cls: 'tm-modal__title tm-draft__title', text: DRAFT_TITLE, parent: this.modal.panel });
     el('p', {
       cls: 'tm-modal__sub',
-      text: 'Shipped. Take something for the next project — you have to take something.',
+      text: 'Reported. Now the human is tweaking the prompt. Pick what they type next: it stays in every prompt until a compaction forgets it.',
       parent: this.modal.panel,
     });
 
-    el('p', {
-      cls: 'tm-draft__hint',
-      text: 'Arrow keys to choose · Enter to take',
-      parent: this.modal.panel,
-      attrs: { 'aria-hidden': 'true' },
-    });
-
-    this.cardsHost = el('div', { cls: 'tm-draft__cards', parent: this.modal.panel });
+    const cardsHost = el('div', { cls: 'tm-draft__cards', parent: this.modal.panel });
     this.cards = new KeyedRows<CardNode>(
-      this.cardsHost,
+      cardsHost,
       (id) => this.makeCard(id),
       (r) => r.el,
     );
 
-    const foot = el('div', { cls: 'tm-title__actions', parent: this.modal.panel });
+    el('p', {
+      cls: 'tm-hint',
+      text: '← → to choose · Enter to confirm',
+      parent: this.modal.panel,
+      attrs: { 'aria-hidden': 'true' },
+    });
+
+    const foot = el('div', { cls: 'tm-modal__actions', parent: this.modal.panel });
+    this.rerollBtn = btn({ cls: 'tm-btn', tid: TID.draftReroll, parent: foot });
+    el('span', { text: 'Reroll ', parent: this.rerollBtn });
+    this.rerollCount = new Txt(
+      el('span', { cls: 'tm-draft__rerolls', tid: TID.draftRerollCount, text: '0', parent: this.rerollBtn }),
+    );
+    this.rerollDis = new Dis(this.rerollBtn);
+    this.rerollDis.set(true);
+
     this.confirmBtn = btn({
       cls: 'tm-btn tm-btn--primary',
       tid: TID.draftConfirm,
@@ -70,78 +86,37 @@ export class Draft {
     this.confirmTxt.set('Pick a card');
     this.confirmDis = new Dis(this.confirmBtn);
     this.confirmDis.set(true);
-    this.disposers.push(on(this.confirmBtn, 'click', () => this.commit()));
-
-    this.rerollBtn = btn({ cls: 'tm-btn', tid: TID.draftReroll, parent: foot });
-    el('span', { text: 'Reroll ', parent: this.rerollBtn });
-    this.rerollCount = new Txt(
-      el('span', { tid: TID.draftRerollCount, text: '0', parent: this.rerollBtn }),
-    );
-    this.rerollHide = new Hide(this.rerollBtn);
-    this.rerollHide.set(true);
 
     this.disposers.push(
-      on(this.modal.el, 'keydown', (ev) => this.onKey(ev as KeyboardEvent)),
+      on(this.confirmBtn, 'click', () => this.commit()),
       on(this.rerollBtn, 'click', () => {
-        const ok = this.ctx.sim.rerollDraft();
-        this.ctx.emit({ t: 'rerollDraft', ok });
-        if (!ok) this.ctx.toast('No rerolls left', 'bad');
+        if (!this.rerollBtn.disabled) this.ctx.emit({ t: 'reroll' });
       }),
+      on(this.modal.el, 'keydown', (ev) => this.onKey(ev as KeyboardEvent)),
     );
-  }
-
-  /**
-   * Arrows move the highlight, Enter takes it. The modal opens with *nothing*
-   * highlighted, so a stray Enter right after shipping still cannot commit —
-   * you have to aim first.
-   */
-  private onKey(e: KeyboardEvent): void {
-    if (!this.modal.isOpen || this.offer.length === 0) return;
-    const dir =
-      e.key === 'ArrowRight' || e.key === 'ArrowDown'
-        ? 1
-        : e.key === 'ArrowLeft' || e.key === 'ArrowUp'
-          ? -1
-          : 0;
-    if (dir !== 0) {
-      e.preventDefault();
-      const at = this.selected ? this.offer.indexOf(this.selected) : -1;
-      const next = this.offer[(at + dir + this.offer.length) % this.offer.length];
-      if (next !== undefined) {
-        this.select(next);
-        this.cards.rows.get(next)?.el.focus();
-      }
-      return;
-    }
-    if (e.key === 'Enter' && this.selected !== null) {
-      // Stop the focused card's native activation firing a second select.
-      e.preventDefault();
-      e.stopPropagation();
-      this.commit();
-    }
   }
 
   get isOpen(): boolean {
     return this.modal.isOpen;
   }
 
+  /** The card currently highlighted, if any. */
+  get highlighted(): string | null {
+    return this.selected;
+  }
+
   /** Force-close (leaving the run screen); the sim keeps its own phase. */
   close(): void {
     if (!this.modal.isOpen) return;
     this.modal.close();
-    this.offer = [];
-    this.selected = null;
-    this.cards.clear();
+    this.reset();
   }
 
   update(run: RunState): void {
-    const drafting = run.phase === 'drafting';
-    if (!drafting) {
+    if (run.phase !== 'drafting') {
       if (this.modal.isOpen) {
         this.modal.close();
-        this.offer = [];
-        this.selected = null;
-        this.cards.clear();
+        this.reset();
       }
       return;
     }
@@ -159,20 +134,18 @@ export class Draft {
       this.offer = run.draftOffer.slice();
       this.cards.sync(this.offer);
       // A reroll invalidates the highlight.
-      this.selected = null;
-      this.confirmTxt.set('Pick a card');
-      this.confirmDis.set(true);
+      this.select(null);
     }
 
-    const rerolls = run.draftRerollsLeft;
-    this.rerollHide.set(rerolls <= 0);
-    this.rerollCount.set(String(Math.max(0, rerolls)));
+    const rerolls = Math.max(0, run.draftRerollsLeft);
+    this.rerollCount.set(String(rerolls));
+    this.rerollDis.set(rerolls <= 0);
 
     if (!this.modal.isOpen) {
       this.modal.open(this.cards.rows.get(this.offer[0] ?? '')?.el ?? null);
     } else if (changed) {
       // Rerolled: the previously focused card is gone.
-      this.modal.focusFirst();
+      this.cards.rows.get(this.offer[0] ?? '')?.el.focus();
     }
   }
 
@@ -183,6 +156,43 @@ export class Draft {
     this.modal.destroy();
   }
 
+  // -------------------------------------------------------------------------
+
+  private reset(): void {
+    this.offer = [];
+    this.selected = null;
+    this.cards.clear();
+    this.confirmTxt.set('Pick a card');
+    this.confirmDis.set(true);
+  }
+
+  /** Arrows move the highlight, Enter takes it. */
+  private onKey(e: KeyboardEvent): void {
+    if (!this.modal.isOpen || this.offer.length === 0) return;
+    const dir =
+      e.key === 'ArrowRight' || e.key === 'ArrowDown'
+        ? 1
+        : e.key === 'ArrowLeft' || e.key === 'ArrowUp'
+          ? -1
+          : 0;
+    if (dir !== 0) {
+      e.preventDefault();
+      const at = this.selected !== null ? this.offer.indexOf(this.selected) : dir > 0 ? -1 : 0;
+      const next = this.offer[(at + dir + this.offer.length) % this.offer.length];
+      if (next !== undefined) {
+        this.select(next);
+        this.cards.rows.get(next)?.el.focus();
+      }
+      return;
+    }
+    if (e.key === 'Enter' && this.selected !== null) {
+      // Stop the focused card's native activation firing a second select.
+      e.preventDefault();
+      e.stopPropagation();
+      this.commit();
+    }
+  }
+
   private makeCard(id: string): CardNode {
     const def = CARD_BY_ID[id];
     const rarity = def?.rarity ?? 'common';
@@ -191,38 +201,37 @@ export class Draft {
       tid: tid(TID.draftCard, id),
       attrs: { 'aria-pressed': 'false' },
     });
-    const head = el('span', { cls: 'tm-card__head', parent: node });
-    iconEl(id, head).classList.add('tm-card__icon');
-    el('span', { cls: 'tm-card__rarity', text: rarity, parent: head });
-    el('span', { cls: 'tm-card__name', text: def?.name ?? id, parent: node });
+    el('span', { cls: 'tm-card__name', text: (def?.name ?? id).toUpperCase(), parent: node });
+    const art = el('span', { cls: 'tm-card__art', parent: node });
+    iconEl(cardIcon(id), art).classList.add('tm-card__icon');
+    el('span', { cls: 'tm-card__rarity', text: rarity, parent: art });
     el('span', { cls: 'tm-card__blurb', text: def?.blurb ?? '', parent: node });
-    // Clicking a card only *highlights* it. Committing is a separate, explicit
-    // press on Confirm — otherwise a stray Space or a second Enter right after
-    // shipping silently locks in whichever card happened to have focus.
+    const what = def ? effectsLine(def.effects, def.onPick ?? []) : '';
+    if (what) el('span', { cls: 'tm-card__effect', text: what, parent: node });
     node.addEventListener('click', () => this.select(id));
     return { el: node };
   }
 
-  /** Highlight a card without committing to it. */
-  private select(id: string): void {
+  /** Highlight a card without committing to it (null clears). */
+  private select(id: string | null): void {
     this.selected = id;
     for (const [key, row] of this.cards.rows) {
-      const on = key === id;
-      row.el.classList.toggle('is-selected', on);
-      row.el.setAttribute('aria-pressed', String(on));
+      const on_ = key === id;
+      row.el.classList.toggle('is-selected', on_);
+      row.el.setAttribute('aria-pressed', String(on_));
     }
-    const def = CARD_BY_ID[id];
-    this.confirmTxt.set(`Take ${def?.name ?? id}`);
+    if (id === null) {
+      this.confirmTxt.set('Pick a card');
+      this.confirmDis.set(true);
+      return;
+    }
+    this.confirmTxt.set('Confirm');
     this.confirmDis.set(false);
   }
 
   private commit(): void {
     const id = this.selected;
-    if (id === null) return;
-    const def = CARD_BY_ID[id];
-    const ok = this.ctx.sim.pickCard(id);
-    this.ctx.emit({ t: 'pickCard', id, ok });
-    if (ok) this.selected = null;
-    else this.ctx.toast(`Could not take ${def?.name ?? id}`, 'bad');
+    if (id === null || this.confirmBtn.disabled) return;
+    this.ctx.emit({ t: 'pickCard', id });
   }
 }

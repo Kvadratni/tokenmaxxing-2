@@ -26,7 +26,7 @@ export interface SpriteDrawOptions {
   w?: number;
   h?: number;
   stretch?: boolean;
-  /** Free parameter handed to the fallback painter (laptop glow strength). */
+  /** Free parameter handed to the fallback painter. */
   extra?: number;
 }
 
@@ -42,6 +42,23 @@ export interface SpriteSystemOptions {
    * pass something tiny.
    */
   sheetTimeoutMs?: number;
+  /**
+   * Load a sheet some other way than `new Image()`: the headless preview tool
+   * decodes the PNGs itself. Resolve null for "failed".
+   */
+  loadImage?: (url: string) => Promise<CanvasImageSource | null>;
+  /**
+   * Fetch the sheets from this base URL instead of where the bundler put them
+   * (e.g. '/sprites/' or a CDN). Only the file name of each sheet is kept.
+   */
+  atlasBase?: string;
+}
+
+/** `https://x/assets/stage-abc.png` + base `/sprites/` -> `/sprites/stage-abc.png`. */
+export function rebaseSheetUrl(url: string, base: string | undefined): string {
+  if (!base) return url;
+  const name = url.split(/[?#]/)[0]!.split('/').pop() ?? url;
+  return `${base.endsWith('/') ? base : `${base}/`}${name}`;
 }
 
 async function loadManifest(): Promise<AtlasManifest | null> {
@@ -64,7 +81,11 @@ async function loadManifest(): Promise<AtlasManifest | null> {
 
 export class SpriteSystem {
   private manifest: AtlasManifest | null = null;
-  private readonly images = new Map<string, HTMLImageElement>();
+  private readonly images = new Map<string, CanvasImageSource>();
+  private readonly loadImage: SpriteSystemOptions['loadImage'];
+  private readonly atlasBase: string | undefined;
+  /** Bumped whenever a sheet settles, so caches of drawn sprites know to repaint. */
+  private gen = 0;
   private readonly sheetState = new Map<string, SheetState>();
   private readonly missing = new Set<string>(REQUIRED_SPRITES);
   private readonly failed = new Set<string>();
@@ -81,6 +102,8 @@ export class SpriteSystem {
 
   constructor(opts: SpriteSystemOptions = {}) {
     this.sheetTimeoutMs = Math.max(1, opts.sheetTimeoutMs ?? DEFAULT_SHEET_TIMEOUT_MS);
+    this.loadImage = opts.loadImage;
+    this.atlasBase = opts.atlasBase;
     this.ready = new Promise<void>((resolve) => {
       this.resolveReady = resolve;
     });
@@ -100,7 +123,7 @@ export class SpriteSystem {
         if (def && def.frames.length > 0 && manifest.sheets[def.sheet]) this.missing.delete(key);
       }
       await Promise.all(
-        Object.entries(manifest.sheets).map(([name, url]) => this.loadSheet(name, url)),
+        Object.entries(manifest.sheets).map(([name, url]) => this.loadSheet(name, rebaseSheetUrl(url, this.atlasBase))),
       );
     }
     this.resolveReady();
@@ -108,6 +131,22 @@ export class SpriteSystem {
 
   private loadSheet(name: string, url: string): Promise<void> {
     this.sheetState.set(name, 'pending');
+    const custom = this.loadImage;
+    if (custom) {
+      return custom(url)
+        .catch(() => null)
+        .then((img) => {
+          if (this.disposed) return;
+          if (img) {
+            this.sheetState.set(name, 'ready');
+            this.images.set(name, img);
+          } else {
+            this.sheetState.set(name, 'failed');
+            this.failed.add(name);
+          }
+          this.gen++;
+        });
+    }
     return new Promise<void>((resolve) => {
       if (typeof Image !== 'function' || !url) {
         this.sheetState.set(name, 'failed');
@@ -132,6 +171,7 @@ export class SpriteSystem {
           this.sheetState.set(name, 'failed');
           this.failed.add(name);
         }
+        this.gen++;
         resolve();
       };
       img.onload = () => finish(true);
@@ -144,9 +184,19 @@ export class SpriteSystem {
     });
   }
 
-  /** True once the atlas resolved (with or without success). */
+  /** True once the atlas manifest resolved. Sheets may still be loading. */
   get loaded(): boolean {
     return this.manifest !== null;
+  }
+
+  /** Changes whenever a sheet finishes (or fails) loading. */
+  get generation(): number {
+    return this.gen;
+  }
+
+  /** True when `key` will blit from a decoded sheet rather than a fallback. */
+  has(key: string): boolean {
+    return this.def(key) !== null;
   }
 
   /**
@@ -286,8 +336,10 @@ export class SpriteSystem {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
     for (const img of this.images.values()) {
-      img.onload = null;
-      img.onerror = null;
+      if (typeof HTMLImageElement !== 'undefined' && img instanceof HTMLImageElement) {
+        img.onload = null;
+        img.onerror = null;
+      }
     }
     this.images.clear();
   }

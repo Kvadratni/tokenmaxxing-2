@@ -1,209 +1,214 @@
-/**
- * Pickups. The point of this content is *verb* variety — a lump sum, a chunk
- * of deadline and an outage cleanse are different things to want, not three
- * flavours of the same multiplier. These tests pin each verb.
- */
 import { describe, expect, it } from 'vitest';
-import {
-  INCIDENT_BY_ID,
-  PICKUPS,
-  PICKUP_BY_ID,
-  PICKUP_TUNING,
-  createSim,
-  defaultMeta,
-  makeActiveIncident,
-  pickupsForScene,
-  projectRequirement,
-} from '../../src/sim/index.ts';
-import type { PickupDef } from '../../src/sim/content.ts';
+import type { GameEvent, MetaFeature, MetaState } from '../../src/sim/types.ts';
+import { BALANCE, PICKUPS, PICKUP_TUNING, TOOL_BY_ID, availablePickups, promptAt } from '../../src/sim/content.ts';
+import { defaultMeta } from '../../src/sim/save.ts';
+import type { Sim, SimOptions } from '../../src/sim/sim.ts';
+import { createSim } from '../../src/sim/sim.ts';
 
-function sim() {
-  return createSim({ seed: 77, meta: defaultMeta(), storage: null, autoStart: true });
+function mkSim(over: SimOptions = {}): Sim {
+  const s = createSim({ seed: 2024, storage: null, persist: false, ...over });
+  s.run.nextIncidentInMs = Number.POSITIVE_INFINITY;
+  return s;
 }
 
-/** Drop `def` on screen exactly where the player is about to click. */
-function place(s: ReturnType<typeof sim>, def: PickupDef) {
-  s.run.pickup = {
-    id: def.id,
-    x: 160,
-    y: 90,
-    vx: 0,
-    baseY: 90,
-    ageS: 0,
-    remainingMs: PICKUP_TUNING.LIFETIME_MS,
-  };
+function record(s: Sim): GameEvent[] {
+  const log: GameEvent[] = [];
+  s.subscribe((e) => log.push(e));
+  return log;
 }
 
-const byAction = (t: string): PickupDef[] => PICKUPS.filter((p) => p.action.t === t);
+function metaWith(levels: Record<string, number>): MetaState {
+  const m = defaultMeta();
+  for (const [k, v] of Object.entries(levels)) m.levels[k] = v;
+  return m;
+}
 
-describe('pickup content', () => {
-  it('every room has at least three possibilities', () => {
-    for (const scene of ['bedroom', 'coworking', 'openplan', 'datacenter', 'orbital'] as const) {
-      expect(pickupsForScene(scene).length, scene).toBeGreaterThanOrEqual(3);
+const PROMPTING = ['prompt_library', 'temperature', 'few_shot', 'unlock_viral', 'system_prompt'];
+
+function withFeatures(extra: string[]): MetaState {
+  const m = defaultMeta();
+  for (const id of [...PROMPTING, ...extra]) m.levels[id] = 1;
+  return m;
+}
+
+/** Collect the forced pickup where it hovers. */
+function grab(s: Sim, id: string): boolean {
+  s.debug.forcePickup(id, 100, 60);
+  return s.collectPickup(100, 60);
+}
+
+describe('spawning', () => {
+  it('waits out the grace window, then spawns every MIN..MAX ms', () => {
+    const s = mkSim();
+    const log = record(s);
+    const spawnTimes: number[] = [];
+    s.subscribe((e) => {
+      if (e.t === 'pickupSpawn') spawnTimes.push(s.run.elapsedMs);
+    });
+    for (let t = 0; t < 400_000; t += 250) {
+      s.tick(250);
+      s.run.patienceMs = s.patienceMaxMs;
+      s.run.context = 0;
+    }
+    expect(spawnTimes[0]).toBeGreaterThanOrEqual(PICKUP_TUNING.GRACE_MS);
+    const expires = log.filter((e) => e.t === 'pickupExpire').length;
+    expect(expires).toBeGreaterThan(5);
+    // Gap between one pickup leaving and the next arriving is MIN..MAX.
+    for (let i = 1; i < spawnTimes.length; i++) {
+      const gap = spawnTimes[i]! - spawnTimes[i - 1]!;
+      expect(gap).toBeGreaterThanOrEqual(PICKUP_TUNING.MIN_MS);
+      expect(gap).toBeLessThanOrEqual(PICKUP_TUNING.MAX_MS + PICKUP_TUNING.LIFETIME_MS + 500);
     }
   });
 
-  it('covers every verb, not just timed multipliers', () => {
-    for (const verb of ['buff', 'slop', 'time', 'cleanse', 'agent']) {
-      expect(byAction(verb).length, `no pickup with action ${verb}`).toBeGreaterThan(0);
-    }
+  it('Serendipity (pickupRate) shortens the gap', () => {
+    const count = (meta: MetaState): number => {
+      const s = mkSim({ meta });
+      let n = 0;
+      s.subscribe((e) => {
+        if (e.t === 'pickupSpawn') n += 1;
+      });
+      for (let t = 0; t < 600_000; t += 250) {
+        s.tick(250);
+        s.run.patienceMs = s.patienceMaxMs;
+        s.run.context = 0;
+      }
+      return n;
+    };
+    const slow = count(withFeatures([]));
+    const fast = count(withFeatures(['serendipity']));
+    expect(fast).toBeGreaterThan(slow * 1.25);
   });
 
-  it('every buff action points at a real good-tone incident', () => {
-    for (const p of byAction('buff')) {
-      const id = (p.action as { incident: string }).incident;
-      const def = INCIDENT_BY_ID[id];
-      expect(def, `${p.id} -> missing incident ${id}`).toBeDefined();
-      expect(def!.tone).toBe('good');
-      // Weight 0 keeps them out of the random incident roll.
-      expect(def!.weight).toBe(0);
-    }
+  it('rare pickups need Lucky Tokens', () => {
+    const none = availablePickups(new Set<MetaFeature>());
+    expect(none.some((p) => p.rare)).toBe(false);
+    const lucky = availablePickups(new Set<MetaFeature>(['rarePickups']));
+    expect(lucky).toHaveLength(PICKUPS.length);
   });
 
-  it('ids and labels are unique', () => {
-    expect(new Set(PICKUPS.map((p) => p.id)).size).toBe(PICKUPS.length);
-    expect(new Set(PICKUPS.map((p) => p.label)).size).toBe(PICKUPS.length);
+  it('drifts across the stage and expires after its lifetime', () => {
+    const s = mkSim();
+    const log = record(s);
+    s.run.nextPickupInMs = 1;
+    s.tick(10);
+    const p = s.run.pickup!;
+    expect(p).not.toBeNull();
+    const x0 = p.x;
+    s.tick(1000);
+    expect(Math.abs(s.run.pickup!.x - x0)).toBeCloseTo(PICKUP_TUNING.SPEED, 0);
+    for (let t = 0; t < PICKUP_TUNING.LIFETIME_MS; t += 250) s.tick(250);
+    expect(s.run.pickup).toBeNull();
+    expect(log.some((e) => e.t === 'pickupExpire')).toBe(true);
   });
 });
 
 describe('collecting', () => {
-  it('a miss leaves the pickup on screen', () => {
-    const s = sim();
-    place(s, PICKUP_BY_ID['energy_drink']!);
-    expect(s.collectPickup(10, 10)).toBe(false);
-    expect(s.run.pickup).not.toBeNull();
-  });
-
-  it('a hit consumes it and schedules the next one', () => {
-    const s = sim();
-    place(s, PICKUP_BY_ID['energy_drink']!);
-    expect(s.collectPickup(162, 92)).toBe(true);
-    expect(s.run.pickup).toBeNull();
-    expect(s.run.nextPickupInMs).toBeGreaterThan(0);
-  });
-
-  it('buff — grants the timed incident and refreshes rather than stacking', () => {
-    const s = sim();
-    const def = PICKUP_BY_ID['energy_drink']!;
-    place(s, def);
-    s.collectPickup(160, 90);
-    expect(s.run.incidents.filter((i) => i.id === 'buff_energy_drink')).toHaveLength(1);
-
-    place(s, def);
-    s.collectPickup(160, 90);
-    expect(s.run.incidents.filter((i) => i.id === 'buff_energy_drink')).toHaveLength(1);
-  });
-
-  it('slop — pays a fraction of the current requirement, so it scales', () => {
-    const s = sim();
-    const def = PICKUP_BY_ID['late_delivery']!;
-    const frac = (def.action as { ofRequirement: number }).ofRequirement;
-    const before = s.run.slop;
-    place(s, def);
-    s.collectPickup(160, 90);
-    expect(s.run.slop - before).toBeCloseTo(projectRequirement(0) * frac, 6);
-    expect(s.run.slopEarned).toBeGreaterThan(0);
-  });
-
-  it('time — puts seconds back on the clock', () => {
-    const s = sim();
-    const def = PICKUP_BY_ID['power_nap']!;
-    const ms = (def.action as { ms: number }).ms;
-    const before = s.run.timeLeftMs;
-    place(s, def);
-    s.collectPickup(160, 90);
-    expect(s.run.timeLeftMs).toBeCloseTo(before + ms, 6);
-  });
-
-  it('cleanse — clears bad incidents but leaves your buffs alone', () => {
-    const s = sim();
-    s.run.incidents.push(makeActiveIncident(INCIDENT_BY_ID['github_down']!, 0));
-    s.run.incidents.push(makeActiveIncident(INCIDENT_BY_ID['flaky_tests']!, 0));
-    s.run.incidents.push(makeActiveIncident(INCIDENT_BY_ID['buff_cold_brew']!, 0));
-
-    place(s, PICKUP_BY_ID['hotfix']!);
-    s.collectPickup(160, 90);
-
-    const left = s.run.incidents.map((i) => i.id);
-    expect(left).toEqual(['buff_cold_brew']);
-  });
-
-  it('cleanse — is the answer to an outage, and unblocks the deploy', () => {
-    const s = sim();
-    s.run.slop = s.derived().requirement * 2;
-    s.run.incidents.push(makeActiveIncident(INCIDENT_BY_ID['github_down']!, 0));
-    expect(s.derived().canShip).toBe(false);
-
-    place(s, PICKUP_BY_ID['hotfix']!);
-    s.collectPickup(160, 90);
-
-    expect(s.derived().shipBlockedBy).toBeNull();
-    expect(s.derived().canShip).toBe(true);
-    expect(s.ship()).toBe(true);
-  });
-
-  it('agent — grants the best tier already fielded, free', () => {
-    const s = sim();
-    s.run.slop = 1e9;
-    s.buyAgent('tab_autocomplete', 1);
-    s.buyAgent('copy_paste_chatbot', 1);
-    const spentBefore = s.run.slopSpent;
-
-    place(s, PICKUP_BY_ID['summer_intern']!);
-    s.collectPickup(160, 90);
-
-    expect(s.run.agents.copy_paste_chatbot).toBe(2);
-    expect(s.run.slopSpent, 'the intern is free').toBe(spentBefore);
-  });
-
-  it('agent — respects the per-tier ceiling', () => {
-    const s = sim();
-    s.run.slop = 1e15;
-    s.buyAgent('tab_autocomplete', Number.POSITIVE_INFINITY);
-    const capped = s.run.agents.tab_autocomplete;
-    place(s, PICKUP_BY_ID['summer_intern']!);
-    s.collectPickup(160, 90);
-    expect(s.run.agents.tab_autocomplete).toBe(capped);
-  });
-
-  it('nothing is collectable outside a running project', () => {
-    const s = sim();
-    place(s, PICKUP_BY_ID['energy_drink']!);
+  it('needs a hit inside the radius and the running phase', () => {
+    const s = mkSim();
+    const log = record(s);
+    s.debug.forcePickup('golden_token', 100, 60);
+    expect(s.collectPickup(100 + PICKUP_TUNING.HIT_RADIUS + 1, 60)).toBe(false);
+    expect(s.collectPickup(100 + PICKUP_TUNING.HIT_RADIUS - 1, 60)).toBe(true);
+    expect(s.collectPickup(100, 60)).toBe(false); // already gone
+    expect(log.find((e) => e.t === 'pickupCollect')).toEqual({ t: 'pickupCollect', id: 'golden_token', x: 100, y: 60 });
+    s.debug.forcePickup('golden_token', 100, 60);
     s.run.phase = 'drafting';
-    expect(s.collectPickup(160, 90)).toBe(false);
-  });
-});
-
-describe('spawning', () => {
-  it('only ever offers pickups legal for the current room', () => {
-    const s = sim();
-    const legal = new Set(pickupsForScene('bedroom').map((p) => p.id));
-    for (let i = 0; i < 4000 && s.run.phase === 'running'; i++) {
-      s.tick(120);
-      if (s.run.pickup) {
-        expect(legal.has(s.run.pickup.id), `${s.run.pickup.id} is not a bedroom pickup`).toBe(true);
-        s.run.pickup = null;
-        s.run.nextPickupInMs = 1;
-      }
-    }
+    expect(s.collectPickup(100, 60)).toBe(false);
   });
 
-  it('rare pickups really are rarer', () => {
-    const s = sim();
-    const seen: Record<string, number> = {};
-    for (let i = 0; i < 40_000 && s.run.phase !== 'lost'; i++) {
-      s.tick(120);
-      if (s.run.pickup) {
-        seen[s.run.pickup.id] = (seen[s.run.pickup.id] ?? 0) + 1;
-        s.run.pickup = null;
-        s.run.nextPickupInMs = 1;
-      }
-      if (s.run.phase !== 'running') s.startRun(1234 + i);
-    }
-    const total = Object.values(seen).reduce((a, b) => a + b, 0);
-    expect(total).toBeGreaterThan(60);
-    const rareShare = PICKUPS.filter((p) => p.rare).reduce((n, p) => n + (seen[p.id] ?? 0), 0) / total;
-    const commonShare = 1 - rareShare;
-    expect(commonShare).toBeGreaterThan(rareShare);
+  it('Golden Token and A Bug pay a fraction of the requirement', () => {
+    const s = mkSim();
+    s.run.promptIndex = 2;
+    grab(s, 'golden_token');
+    expect(s.run.tokens).toBeCloseTo(0.2 * promptAt(2).requirement, 8);
+    grab(s, 'a_bug');
+    expect(s.run.tokens).toBeCloseTo(0.3 * promptAt(2).requirement, 8);
+  });
+
+  it('Cache Hit frees a fifth of the window, never below the floor', () => {
+    const s = mkSim();
+    s.run.context = 5000;
+    grab(s, 'cache_hit');
+    expect(s.run.context).toBeCloseTo(5000 - 0.2 * BALANCE.BASE_CONTEXT, 8);
+    s.run.tools.mcp_server = 1;
+    s.run.context = 1000;
+    grab(s, 'cache_hit');
+    expect(s.run.context).toBe(TOOL_BY_ID.mcp_server.floor);
+  });
+
+  it('"thanks!" restores patience', () => {
+    const s = mkSim();
+    const max = s.patienceMaxMs;
+    s.run.patienceMs = max / 2;
+    grab(s, 'thanks_note');
+    expect(s.run.patienceMs).toBeCloseTo(max * 0.7, 6);
+  });
+
+  it('buffs run as good incidents, and refresh rather than stack', () => {
+    const s = mkSim();
+    const log = record(s);
+    grab(s, 'stack_overflow');
+    expect(s.run.incidents.map((i) => i.id)).toEqual(['pk_stack_overflow']);
+    expect(log.find((e) => e.t === 'incidentStart')).toEqual({ t: 'incidentStart', id: 'pk_stack_overflow', tone: 'good' });
+    expect(s.derived().clickPower).toBe(BALANCE.BASE_CLICK * 5);
+    s.tick(2000);
+    grab(s, 'stack_overflow');
+    expect(s.run.incidents).toHaveLength(1);
+    expect(s.run.incidents[0]?.remainingMs).toBe(8_000);
+    grab(s, 'documentation');
+    expect(s.derived().multipliers.idle).toBe(2);
+  });
+
+  it('the Rubber Duck cleanses bad incidents and leaves good ones', () => {
+    const s = mkSim();
+    s.debug.forceIncident('linter');
+    s.debug.forceIncident('overloaded');
+    s.debug.forceIncident('lunch');
+    grab(s, 'rubber_duck');
+    expect(s.run.incidents.map((i) => i.id)).toEqual(['lunch']);
+  });
+
+  it('👍 adds to the pending tally', () => {
+    const s = mkSim();
+    grab(s, 'thumbs_up');
+    expect(s.run.pendingThumbs).toBe(1);
+  });
+
+  it('a Free Subagent is one unit of the best tool fielded, respecting the cap', () => {
+    const s = mkSim();
+    const log = record(s);
+    grab(s, 'free_subagent');
+    expect(s.run.tools.grep).toBe(1); // nothing owned: tier 1
+    s.run.tools.read = 3;
+    grab(s, 'free_subagent');
+    expect(s.run.tools.read).toBe(4);
+    expect(log.filter((e) => e.t === 'buyTool').at(-1)).toEqual({ t: 'buyTool', id: 'read', cost: 0, owned: 4 });
+    s.run.tools.read = TOOL_BY_ID.read.maxOwned;
+    grab(s, 'free_subagent');
+    expect(s.run.tools.read).toBe(TOOL_BY_ID.read.maxOwned);
+    expect(s.run.tools.grep).toBe(2); // fell back to the best tool with room
+  });
+
+  it('forcePickup hovers where it was put and refuses unknown ids', () => {
+    const s = mkSim();
+    expect(s.debug.forcePickup('nope')).toBe(false);
+    expect(s.debug.forcePickup('golden_token')).toBe(true);
+    const p = s.run.pickup!;
+    expect(p.vx).toBe(0);
+    s.tick(1000);
+    expect(s.run.pickup?.x).toBe(p.x);
+    expect(s.collectPickup(s.run.pickup!.x, s.run.pickup!.baseY)).toBe(true);
+  });
+
+  it('a new prompt clears the stage and restarts the grace window', () => {
+    const s = mkSim({ meta: metaWith({}) });
+    s.debug.forcePickup('golden_token');
+    s.run.tokens = 100;
+    s.report();
+    s.tick(BALANCE.REPORT_BEAT_MS + 1);
+    s.pickCard(s.run.draftOffer[0]!);
+    expect(s.run.pickup).toBeNull();
+    expect(s.run.nextPickupInMs).toBe(PICKUP_TUNING.GRACE_MS);
   });
 });

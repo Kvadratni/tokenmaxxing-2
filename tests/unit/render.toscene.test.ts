@@ -1,11 +1,12 @@
 /**
  * Pointer coordinates -> scene coordinates.
  *
- * This was broken on every touchscreen. `toScene` read a cached origin that is
- * only refreshed on *resize*, but an element can move without resizing: on a
- * viewport too narrow for the stage the canvas gets offset (left went to -125 on
- * a phone) at the same size. Every tap then mapped tens of scene pixels away
- * from where it landed, the laptop hit test failed, and tapping produced nothing.
+ * This was broken on every touchscreen in game 1. `toScene` read a cached
+ * origin that is only refreshed on *resize*, but an element can move without
+ * resizing: on a viewport too narrow for the stage the canvas gets offset (left
+ * went to -125 on a phone) at the same size. Every tap then mapped tens of
+ * scene pixels away from where it landed, the click target's hit test failed,
+ * and tapping produced nothing. The agent inherits the fix.
  *
  * The existing @mobile e2e project could not catch it — at 390px the stage fits,
  * so the origin stays correct, and `click()` dispatches mouse events anyway. So
@@ -14,7 +15,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Viewport } from '../../src/render/canvas.ts';
-import { LAPTOP_RECT } from '../../src/render/atlas-types.ts';
+import { AGENT_RECT } from '../../src/render/atlas-types.ts';
+import { hitsAgent } from '../../src/render/canvas.ts';
 import { SCENE_HEIGHT, SCENE_WIDTH } from '../../src/sim/types.ts';
 
 /** A canvas whose on-screen box we control, without any real layout. */
@@ -55,14 +57,15 @@ describe('toScene', () => {
     // The measured phone case: 640x360 stage, left edge pushed off screen.
     const c = canvasAt(-125, 103.9375, 2);
     const v = new Viewport(c, null);
-    const p = v.toScene(195, 340);
-    // Dead centre of the laptop art, which is what the player tapped.
+    const p = v.toScene(195, 380);
+    // The middle of the agent, which is what the player tapped.
     expect(p.x).toBeCloseTo(160, 1);
-    expect(p.y).toBeCloseTo(118, 1);
-    expect(p.x).toBeGreaterThanOrEqual(LAPTOP_RECT.x);
-    expect(p.x).toBeLessThanOrEqual(LAPTOP_RECT.x + LAPTOP_RECT.w);
-    expect(p.y).toBeGreaterThanOrEqual(LAPTOP_RECT.y);
-    expect(p.y).toBeLessThanOrEqual(LAPTOP_RECT.y + LAPTOP_RECT.h);
+    expect(p.y).toBeCloseTo(138, 1);
+    expect(p.x).toBeGreaterThanOrEqual(AGENT_RECT.x);
+    expect(p.x).toBeLessThanOrEqual(AGENT_RECT.x + AGENT_RECT.w);
+    expect(p.y).toBeGreaterThanOrEqual(AGENT_RECT.y);
+    expect(p.y).toBeLessThanOrEqual(AGENT_RECT.y + AGENT_RECT.h);
+    expect(hitsAgent(p.x, p.y)).toBe(true);
     v.destroy();
   });
 

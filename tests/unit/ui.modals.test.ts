@@ -1,238 +1,188 @@
 /**
- * Draft modal, run-over modal, focus trapping and Escape policy.
+ * Help, About, Options, toasts and the achievement popup.
  */
-import { afterEach, describe, expect, it } from 'vitest';
-import { TID, tid } from '../../src/testids.ts';
-import { createUI } from '../../src/ui/index.ts';
-import type { UI, UIScreen } from '../../src/ui/types.ts';
-import {
-  allPrefixed,
-  isHidden,
-  key,
-  makeDerived,
-  makeFakeSim,
-  makeRun,
-  must,
-  q,
-  type FakeSim,
-} from './ui.fake-sim.ts';
-import type { RunState } from '../../src/sim/types.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACHIEVEMENT_BY_ID, BALANCE, CARD_BY_ID, UPGRADE_BY_ID } from '../../src/sim/content.ts';
+import { TID } from '../../src/testids.ts';
+import { HELP_CONTROLS } from '../../src/ui/help.ts';
+import { DENIED_TEXT } from '../../src/ui/index.ts';
+import { isHidden, key, makeMeta, makeSettings, mountUI, must, unmountAll } from './ui.fake-sim.ts';
 
-let mounted: UI | null = null;
-let host: HTMLElement | null = null;
+afterEach(unmountAll);
 
-function mount(
-  over: Partial<RunState> = {},
-  screen: UIScreen = 'run',
-): { ui: UI; root: HTMLElement; sim: FakeSim; frame: () => void } {
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const sim = makeFakeSim({ run: makeRun(over) });
-  const ui = createUI({ root, sim, screen, now: () => 0 });
-  mounted = ui;
-  host = root;
-  const frame = (): void => ui.update(sim.run, makeDerived(sim.run), sim.meta);
-  frame();
-  return { ui, root, sim, frame };
-}
+const toasts = (root: HTMLElement): string[] =>
+  Array.from(root.querySelectorAll(`[data-testid="${TID.toast}"]`), (n) => n.textContent ?? '');
 
-afterEach(() => {
-  mounted?.destroy();
-  mounted = null;
-  host?.remove();
-  host = null;
-  document.body.replaceChildren();
-});
-
-describe('draft modal', () => {
-  const drafting = { phase: 'drafting' as const, draftOffer: ['sonnet', 'haiku', 'opus'] };
-
-  it('is closed while the run is running', () => {
-    const { root } = mount();
-    expect(isHidden(q(root, TID.draftModal))).toBe(true);
-  });
-
-  it('opens on phase=drafting and renders one card per offer entry', () => {
-    const { root } = mount(drafting);
-    const modal = must(root, TID.draftModal);
+describe('help', () => {
+  it('opens from ? and covers the mechanics and the controls', () => {
+    const m = mountUI();
+    (must(m.root, TID.helpButton) as HTMLButtonElement).click();
+    const modal = must(m.root, TID.helpModal);
     expect(isHidden(modal)).toBe(false);
-    expect(modal.getAttribute('role')).toBe('dialog');
-    expect(modal.getAttribute('aria-modal')).toBe('true');
-    expect(allPrefixed(root, TID.draftCard)).toHaveLength(3);
-    for (const id of drafting.draftOffer) {
-      expect(q(root, tid(TID.draftCard, id))).not.toBeNull();
-    }
+    const all = modal.textContent ?? '';
+    expect(all).toContain('context window');
+    expect(all).toContain('CLAIM DONE');
+    expect(all).toContain('/compact');
+    expect(all).toContain('(contents too large to include)');
+    // Numbers come from content, never typed in.
+    expect(all).toContain(`${Math.round(BALANCE.COMPACT_KEEP_FORCED * 100)}%`);
+    expect(all).toContain(`${Math.round(BALANCE.CLAIM_THRESHOLD * 100)}%`);
   });
 
-  it('renders four cards when Prompt Library widens the offer', () => {
-    const { root } = mount({
-      phase: 'drafting',
-      draftOffer: ['sonnet', 'haiku', 'opus', 'rubber_duck'],
+  it('lists every control: the agent or Space, 1-9, S, Y, C, Esc', () => {
+    const m = mountUI();
+    const controls = must(m.root, TID.helpControls);
+    const keys = Array.from(controls.querySelectorAll('kbd'), (k) => k.textContent);
+    for (const k of ['Space', '1–9', 'S', 'Y', 'C', 'Esc']) expect(keys).toContain(k);
+    expect(controls.textContent).toContain('agent');
+    expect(controls.querySelectorAll('tr')).toHaveLength(HELP_CONTROLS.length);
+  });
+
+  it('has a Between sessions section on Training', () => {
+    const m = mountUI();
+    const meta = must(m.root, TID.helpMeta);
+    expect(meta.textContent).toContain('Between sessions');
+    expect(meta.textContent).toContain('Training');
+    expect(meta.textContent).toContain('👍');
+  });
+
+  it('closes on Got it, and on Escape', () => {
+    const m = mountUI();
+    (must(m.root, TID.helpButton) as HTMLButtonElement).click();
+    (must(m.root, TID.helpClose) as HTMLButtonElement).click();
+    expect(isHidden(must(m.root, TID.helpModal))).toBe(true);
+    (must(m.root, TID.helpButton) as HTMLButtonElement).click();
+    key(must(m.root, TID.helpModal), 'Escape');
+    expect(isHidden(must(m.root, TID.helpModal))).toBe(true);
+  });
+});
+
+describe('about', () => {
+  it('opens from the title and closes again', () => {
+    const m = mountUI({ screen: 'title' });
+    (must(m.root, TID.aboutButton) as HTMLButtonElement).click();
+    const modal = must(m.root, TID.aboutModal);
+    expect(isHidden(modal)).toBe(false);
+    expect(modal.textContent).toContain('Tokenmaxxing 2');
+    expect(modal.querySelector(`[data-testid="${TID.prequelLink}"]`)).not.toBeNull();
+    (must(m.root, TID.aboutClose) as HTMLButtonElement).click();
+    expect(isHidden(modal)).toBe(true);
+  });
+});
+
+describe('options', () => {
+  function open() {
+    const m = mountUI({
+      meta: makeMeta({ settings: makeSettings() }),
+      onAction: (a, mm) => {
+        // Behave like a host: apply the patch the way `sim.setSettings` would.
+        if (a.t === 'settings') Object.assign(mm.sim.meta.settings, a.patch);
+      },
     });
-    expect(allPrefixed(root, TID.draftCard)).toHaveLength(4);
+    (must(m.root, TID.optionsButton) as HTMLButtonElement).click();
+    return m;
+  }
+
+  it('sends a settings patch per control, and reflects what the sim holds', () => {
+    const m = open();
+    const motion = must(m.root, TID.reducedMotion) as HTMLButtonElement;
+    expect(motion.getAttribute('aria-pressed')).toBe('false');
+    motion.click();
+    expect(m.sent('settings')).toEqual([{ t: 'settings', patch: { reducedMotion: true } }]);
+    expect(motion.getAttribute('aria-pressed')).toBe('true');
+    m.frame();
+    expect(m.ui.el.getAttribute('data-reduced-motion')).toBe('1');
   });
 
-  it('highlights a card on click but does not commit it', () => {
-    const { root, sim } = mount(drafting);
-    must(root, tid(TID.draftCard, 'haiku')).click();
-    // Selection is not a purchase — this is what stops a stray keypress right
-    // after shipping from locking in the wrong card.
-    expect(sim.pickCard).not.toHaveBeenCalled();
-    expect(must(root, tid(TID.draftCard, 'haiku')).getAttribute('aria-pressed')).toBe('true');
+  it('mutes both volumes and restores them', () => {
+    const m = open();
+    const mute = must(m.root, TID.muteToggle) as HTMLButtonElement;
+    mute.click();
+    expect(m.sent('settings').at(-1)).toEqual({ t: 'settings', patch: { musicVolume: 0, sfxVolume: 0 } });
+    expect(mute.getAttribute('aria-pressed')).toBe('true');
+    mute.click();
+    expect(m.sent('settings').at(-1)).toEqual({ t: 'settings', patch: { musicVolume: 0.6, sfxVolume: 0.8 } });
   });
 
-  it('commits only when Confirm is pressed, with the highlighted id', () => {
-    const { root, sim } = mount(drafting);
-    expect((must(root, TID.draftConfirm) as HTMLButtonElement).disabled).toBe(true);
-    must(root, tid(TID.draftCard, 'haiku')).click();
-    expect((must(root, TID.draftConfirm) as HTMLButtonElement).disabled).toBe(false);
-    must(root, TID.draftConfirm).click();
-    expect(sim.pickCard).toHaveBeenCalledWith('haiku');
+  it('moves a volume slider into a patch', () => {
+    const m = open();
+    const music = must(m.root, 'music-volume') as HTMLInputElement;
+    music.value = '25';
+    music.dispatchEvent(new Event('input'));
+    expect(m.sent('settings').at(-1)).toEqual({ t: 'settings', patch: { musicVolume: 0.25 } });
   });
 
-  it('re-highlighting swaps the selection instead of stacking picks', () => {
-    const { root, sim } = mount(drafting);
-    must(root, tid(TID.draftCard, 'haiku')).click();
-    must(root, tid(TID.draftCard, 'sonnet')).click();
-    must(root, TID.draftConfirm).click();
-    expect(sim.pickCard).toHaveBeenCalledTimes(1);
-    expect(sim.pickCard).toHaveBeenCalledWith('sonnet');
-  });
-
-  it('cannot be dismissed with Escape', () => {
-    const { root } = mount(drafting);
-    const card = must(root, tid(TID.draftCard, 'sonnet'));
-    card.focus();
-    const e = key(card, 'Escape');
-    expect(e.defaultPrevented).toBe(true);
-    expect(isHidden(q(root, TID.draftModal))).toBe(false);
-  });
-
-  it('closes once the sim leaves the drafting phase', () => {
-    const { root, sim, frame } = mount(drafting);
-    expect(isHidden(q(root, TID.draftModal))).toBe(false);
-    sim.run.phase = 'running';
-    sim.run.draftOffer = [];
-    frame();
-    expect(isHidden(q(root, TID.draftModal))).toBe(true);
-    expect(allPrefixed(root, TID.draftCard)).toHaveLength(0);
-  });
-
-  it('hides the reroll button at zero rerolls and calls rerollDraft otherwise', () => {
-    const { root, sim, frame } = mount(drafting);
-    expect(isHidden(q(root, TID.draftReroll))).toBe(true);
-
-    sim.run.draftRerollsLeft = 2;
-    frame();
-    const reroll = must(root, TID.draftReroll);
-    expect(isHidden(reroll)).toBe(false);
-    expect(must(root, TID.draftRerollCount).textContent).toBe('2');
-    reroll.click();
-    expect(sim.rerollDraft).toHaveBeenCalledTimes(1);
-  });
-
-  it('traps Tab from the last focusable back to the first', () => {
-    const { root } = mount({ ...drafting, draftRerollsLeft: 1 });
-    const first = must(root, tid(TID.draftCard, 'sonnet'));
-    const reroll = must(root, TID.draftReroll);
-
-    reroll.focus();
-    expect(document.activeElement).toBe(reroll);
-    const fwd = key(reroll, 'Tab');
-    expect(fwd.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(first);
-
-    // and shift-tab from the first wraps back to the last
-    const back = key(first, 'Tab', { shiftKey: true });
-    expect(back.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(reroll);
-  });
-
-  it('focuses the first card when it opens', () => {
-    const { root } = mount(drafting);
-    expect(document.activeElement).toBe(must(root, tid(TID.draftCard, 'sonnet')));
+  it('asks twice before wiping the save, then leaves the wiping to the host', () => {
+    const m = open();
+    const reset = must(m.root, TID.resetSave) as HTMLButtonElement;
+    reset.click();
+    expect(m.sent('resetSave')).toHaveLength(0);
+    expect(reset.textContent).toContain('Really');
+    reset.click();
+    expect(m.sent('resetSave')).toHaveLength(1);
+    expect(isHidden(must(m.root, TID.optionsPanel))).toBe(true);
   });
 });
 
-describe('run over modal', () => {
-  it('shows SIGKILL on a loss', () => {
-    const { root } = mount({ phase: 'lost', shipped: 3, pendingDemos: 5, clicks: 120 });
-    expect(isHidden(q(root, TID.runOverModal))).toBe(false);
-    expect(must(root, TID.runOverTitle).textContent).toBe('SIGKILL');
-    expect(must(root, TID.runOverDemos).textContent).toContain('5');
-    expect(must(root, TID.runOverContinue)).toBeTruthy();
+describe('toasts', () => {
+  it('turns a denial into words: tokens for cost, 👍 for thumbs', () => {
+    const m = mountUI();
+    m.ui.handle({ t: 'denied', reason: 'cost' });
+    m.ui.handle({ t: 'denied', reason: 'thumbs' });
+    expect(DENIED_TEXT.cost).toBe('Not enough tokens');
+    expect(DENIED_TEXT.thumbs).toBe('Not enough 👍');
+    expect(toasts(m.root)).toEqual(['Not enough tokens', 'Not enough 👍']);
   });
 
-  it('shows DEMO DAY on a win', () => {
-    const { root } = mount({ phase: 'won', shipped: 10, pendingDemos: 14 });
-    expect(must(root, TID.runOverTitle).textContent).toBe('DEMO DAY');
-    expect(must(root, TID.runOverTitle).className).toContain('is-won');
+  it('collapses a rapid-fire duplicate', () => {
+    const m = mountUI();
+    m.ui.handle({ t: 'denied', reason: 'cost' });
+    m.ui.handle({ t: 'denied', reason: 'cost' });
+    expect(toasts(m.root)).toHaveLength(1);
   });
 
-  it('breaks the demos down into base + bonus', () => {
-    const { root } = mount({ phase: 'lost', shipped: 3, pendingDemos: 7 });
-    const text = must(root, TID.runOverModal).textContent ?? '';
-    expect(text).toContain('3 × ◈1 = ◈3');
-    expect(text).toContain('◈4'); // bonus = 7 - 3
-  });
-
-  it('stays closed while the run is live', () => {
-    const { root } = mount({ phase: 'running' });
-    expect(isHidden(q(root, TID.runOverModal))).toBe(true);
-  });
-
-  it('continue banks into the meta screen', () => {
-    const { root, ui } = mount({ phase: 'lost', pendingDemos: 2 });
-    must(root, TID.runOverContinue).click();
-    expect(ui.screen).toBe('meta');
-    expect(isHidden(q(root, TID.runOverModal))).toBe(true);
-    expect(isHidden(q(root, TID.metaScreen))).toBe(false);
-  });
-
-  it('is not Escape-dismissable either', () => {
-    const { root } = mount({ phase: 'lost' });
-    const cont = must(root, TID.runOverContinue);
-    cont.focus();
-    key(cont, 'Escape');
-    expect(isHidden(q(root, TID.runOverModal))).toBe(false);
+  it('narrates the session: reports, claims, compactions, picks, pickups', () => {
+    const m = mountUI();
+    // Every line checked as it lands: the stack only keeps the last few.
+    const say = (e: Parameters<typeof m.ui.handle>[0]): string => {
+      m.tick(1_000);
+      m.ui.handle(e);
+      return toasts(m.root).at(-1) ?? '';
+    };
+    expect(say({ t: 'report', promptIndex: 0, thumbs: 2, patienceLeft: 0.5 })).toBe('Reported done · +2 👍');
+    expect(say({ t: 'claim', promptIndex: 1, caught: true, verifyChance: 0.4, spent: 50 })).toContain(
+      'The human ran the tests',
+    );
+    expect(say({ t: 'claim', promptIndex: 1, caught: false, verifyChance: 0.4, spent: 50 })).toContain('+1 tech debt');
+    expect(say({ t: 'compactEnd', keptCards: ['please'], droppedCards: ['grandma'] })).toBe(
+      `Forgot ${CARD_BY_ID['grandma']!.name}`,
+    );
+    expect(say({ t: 'draftPick', id: 'please' })).toBe('The human typed PLEASE');
+    expect(say({ t: 'buyUpgrade', id: 'streaming', cost: 60 })).toBe(`Installed ${UPGRADE_BY_ID['streaming']!.name}`);
+    expect(say({ t: 'pickupCollect', id: 'golden_token', x: 1, y: 1 })).toContain('Golden Token');
+    expect(say({ t: 'toolLost', id: 'bash', owned: 3 })).toBe('rm -rf took a Bash with it');
+    expect(say({ t: 'contextWarn', fill: 0.95 })).toContain('compaction imminent');
+    expect(toasts(m.root).length).toBeLessThanOrEqual(4);
   });
 });
 
-describe('options dialog', () => {
-  it('closes on Escape and restores focus', () => {
-    const { root } = mount();
-    const opener = must(root, TID.optionsButton);
-    opener.focus();
-    opener.click();
-    const panel = must(root, TID.optionsPanel);
-    expect(isHidden(panel)).toBe(false);
-
-    key(document.activeElement ?? panel, 'Escape');
-    expect(isHidden(panel)).toBe(true);
-    expect(document.activeElement).toBe(opener);
+describe('achievement popup', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('traps Tab inside the options panel', () => {
-    const { root } = mount();
-    must(root, TID.optionsButton).click();
-    const panel = must(root, TID.optionsPanel);
-    const items = Array.from(
-      panel.querySelectorAll<HTMLElement>('button, input'),
-    ).filter((n) => !(n as HTMLButtonElement).disabled);
-    const first = items[0]!;
-    const last = items[items.length - 1]!;
-    last.focus();
-    key(last, 'Tab');
-    expect(document.activeElement).toBe(first);
-  });
-});
-
-describe('meta screen escape', () => {
-  it('Escape returns to the title screen', () => {
-    const { root, ui } = mount({}, 'meta');
-    expect(ui.screen).toBe('meta');
-    key(window, 'Escape');
-    expect(ui.screen).toBe('title');
-    expect(isHidden(q(root, TID.titleScreen))).toBe(false);
+  it('slides in the earned achievement with its name and blurb', () => {
+    const m = mountUI();
+    m.ui.handle({ t: 'achievement', id: 'compacted' });
+    const card = must(m.root, `${TID.achievementPopupCard}-compacted`);
+    const def = ACHIEVEMENT_BY_ID['compacted']!;
+    expect(card.textContent).toContain(def.name);
+    expect(card.textContent).toContain(def.blurb);
+    expect(card.querySelector('.tm-icon')!.getAttribute('data-icon')).toBe(def.icon);
+    vi.advanceTimersByTime(20_000);
+    expect(m.root.querySelector(`[data-testid="${TID.achievementPopupCard}-compacted"]`)).toBeNull();
   });
 });

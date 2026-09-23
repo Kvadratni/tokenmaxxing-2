@@ -2,6 +2,7 @@
  * Transient messages. Polite live region so a screen reader hears denied
  * purchases and incident chatter without stealing focus.
  */
+import { TID } from '../testids.ts';
 import { el } from './dom.ts';
 import type { ToastTone } from './types.ts';
 
@@ -32,7 +33,7 @@ export class Toasts {
     const node = el('div', {
       cls: `tm-toast tm-toast--${tone}`,
       text,
-      tid: 'toast',
+      tid: TID.toast,
       parent: this.el,
     });
 

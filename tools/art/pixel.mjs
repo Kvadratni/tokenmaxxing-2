@@ -546,3 +546,117 @@ export function decodePNGSize(filePath) {
   }
   return { w: data.readUInt32BE(16), h: data.readUInt32BE(20) };
 }
+
+// ---------------------------------------------------------------------------
+// Tokenmaxxing 2 additions: helpers for authoring stage sprites in scene space.
+// ---------------------------------------------------------------------------
+
+/**
+ * Paint an ASCII template. Each character is looked up in `colors`; a missing
+ * key or `.` leaves the pixel untouched. Returns the template's width.
+ */
+export function stamp(cv, x, y, rows, colors) {
+  rows.forEach((row, r) => {
+    for (let c = 0; c < row.length; c += 1) {
+      const color = colors[row[c]];
+      if (color) cv.put(x + c, y + r, color);
+    }
+  });
+  return rows.reduce((max, row) => Math.max(max, row.length), 0);
+}
+
+/** Mirror a canvas left-to-right. */
+export function flipH(src) {
+  const out = new Canvas(src.w, src.h);
+  for (let y = 0; y < src.h; y += 1) {
+    for (let x = 0; x < src.w; x += 1) {
+      const i = (y * src.w + x) * 4;
+      const j = (y * src.w + (src.w - 1 - x)) * 4;
+      out.data[j] = src.data[i];
+      out.data[j + 1] = src.data[i + 1];
+      out.data[j + 2] = src.data[i + 2];
+      out.data[j + 3] = src.data[i + 3];
+    }
+  }
+  return out;
+}
+
+/** Tight bounding box of every non-transparent pixel, or null when empty. */
+export function opaqueBounds(cv) {
+  let x0 = cv.w; let y0 = cv.h; let x1 = -1; let y1 = -1;
+  for (let y = 0; y < cv.h; y += 1) {
+    for (let x = 0; x < cv.w; x += 1) {
+      if (cv.data[(y * cv.w + x) * 4 + 3] === 0) continue;
+      if (x < x0) x0 = x;
+      if (y < y0) y0 = y;
+      if (x > x1) x1 = x;
+      if (y > y1) y1 = y;
+    }
+  }
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/**
+ * Crop several same-size canvases to the union of their opaque bounds, so an
+ * animation authored in scene space keeps one frame size and one origin.
+ * Returns the cropped frames plus the origin (the atlas `ox` / `oy`).
+ */
+export function cropFrames(frames, pad = 0) {
+  let box = null;
+  for (const frame of frames) {
+    const b = opaqueBounds(frame);
+    if (!b) continue;
+    box = box === null ? { ...b } : (() => {
+      const x0 = Math.min(box.x, b.x); const y0 = Math.min(box.y, b.y);
+      const x1 = Math.max(box.x + box.w, b.x + b.w); const y1 = Math.max(box.y + box.h, b.y + b.h);
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    })();
+  }
+  if (!box) throw new Error('cropFrames: every frame is empty');
+  const x = Math.max(0, box.x - pad); const y = Math.max(0, box.y - pad);
+  const w = Math.min(frames[0].w - x, box.w + pad * 2);
+  const h = Math.min(frames[0].h - y, box.h + pad * 2);
+  return { frames: frames.map((frame) => frame.sub(x, y, w, h)), x, y };
+}
+
+/**
+ * Sparse ordered-dither halo around every opaque pixel: the "soft dithered
+ * glow" of the concept art, built from whole pixels only. Density falls off
+ * with distance; only transparent pixels are touched.
+ */
+export function glowHalo(cv, color, radius, strength = 0.6, matrix = 4) {
+  const src = cv.data.slice();
+  const w = cv.w; const h = cv.h;
+  const solid = (x, y) => x >= 0 && y >= 0 && x < w && y < h && src[(y * w + x) * 4 + 3] >= 128;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (src[(y * w + x) * 4 + 3] !== 0) continue;
+      let best = Infinity;
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          if (!solid(x + dx, y + dy)) continue;
+          const d = Math.hypot(dx, dy);
+          if (d < best) best = d;
+        }
+      }
+      if (best > radius) continue;
+      const t = (1 - (best - 1) / radius) * strength;
+      if (bayer(x, y, matrix) < t) cv.put(x, y, color);
+    }
+  }
+}
+
+/** Fill a scanline span shape: `span(y)` returns [x0, x1] or null. */
+export function fillSpans(cv, y0, y1, span, color) {
+  for (let y = y0; y <= y1; y += 1) {
+    const s = span(y);
+    if (!s) continue;
+    cv.hline(Math.round(s[0]), Math.round(s[1]), y, color);
+  }
+}
+
+/** Horizontal half-width of an ellipse at row `y`, or -1 outside it. */
+export function ellipseHalf(cy, rx, ry, y) {
+  const t = (y - cy) / ry;
+  return t * t > 1 ? -1 : rx * Math.sqrt(1 - t * t);
+}

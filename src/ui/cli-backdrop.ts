@@ -1,6 +1,10 @@
 /**
- * Ambient fake agent session — the scrolling terminal behind the title screen
- * and the Demos tree.
+ * Ambient agent session: the scrolling terminal behind the title screen.
+ *
+ * Game 1's backdrop was the human watching an agent. This one is the other
+ * side of the glass: the human's prompts come in (`> ok do it`), and the agent
+ * (you) reads every file, asks permission to delete things, says "You're
+ * absolutely right!", compacts, forgets, and claims the tests pass.
  *
  *   const cli = createCliBackdrop({ reducedMotion: () => settings.reducedMotion });
  *   title.el.classList.add('tm-cli-host');
@@ -20,6 +24,8 @@
  * the same session — deterministic for tests and screenshots, but long enough
  * in the cycle that nobody watching the title screen notices the loop.
  */
+import { PROMPT_TEXTS } from '../sim/content.ts';
+import { TID } from '../testids.ts';
 import { el } from './dom.ts';
 
 /** Hard budget for a rendered line, in characters. Longer lines clip. */
@@ -95,7 +101,7 @@ export function createCliBackdrop(opts: CliBackdropOpts = {}): CliBackdrop {
 
   const root = el('div', {
     cls: 'tm-cli',
-    tid: 'cli-backdrop',
+    tid: TID.cliBackdrop,
     attrs: { 'aria-hidden': 'true' },
   });
   // Also inline, not only in cli.css: if the stylesheet ever fails to load the
@@ -287,7 +293,7 @@ interface Rng {
   int(n: number): number;
 }
 
-/** mulberry32 — same generator the sim uses, kept local so this module has no deps. */
+/** mulberry32, the generator the sim uses, kept local so this module has no deps. */
 function makeRng(seed: number): Rng {
   let a = (Math.trunc(seed) | 0) || 1;
   const next = (): number => {
@@ -321,394 +327,461 @@ function dur(r: Rng): string {
   return (0.8 + r.next() * 5).toFixed(2);
 }
 
+/** `2000` -> `2,000`. The backdrop has no business importing the sim's formatter. */
+function grouped(n: number): string {
+  return String(Math.floor(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/* ---------------------------------------------------------------------- */
+/* the joke pools: the agent's side of the glass                          */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * One job the human hands you. `files[0]` is read first, `target` is where the
+ * edit lands, `fail` is what the test runner says, `claim` is what you say.
+ */
 interface Task {
   readonly prompt: string;
   readonly files: NonEmpty<string>;
   readonly grep: string;
   readonly test: string;
+  /** The test command, when it is not `npm test`. */
+  readonly run?: string;
   readonly code: NonEmpty<string>;
   /** Assertion text printed under a failing test. */
   readonly fail: string;
+  /** What you tell the human when it is "done". */
+  readonly claim: string;
   /** Commit subject. Keep to 48 characters. */
   readonly commit: string;
 }
 
 const TASKS: NonEmpty<Task> = [
   {
-    prompt: 'implement the checkout flow',
-    files: ['src/checkout/cart.ts', 'src/checkout/total.ts', 'src/api/routes.ts'],
-    grep: 'TODO',
-    test: 'cart.test.ts',
-    code: [
-      'export async function checkout(cart: Cart) {',
-      '  const total = cart.items.reduce(sumLine, 0);',
-      '  if (total <= 0) throw new Error("empty cart");',
-      '  return post("/api/checkout", { total });',
-      '}',
-    ],
-    fail: 'expected 21.98 to be 19.99 (tax applied twice)',
-    commit: 'feat: checkout, tax applied exactly once',
+    prompt: 'fix the typo in the readme',
+    files: ['README.md', 'docs/CONTRIBUTING.md', 'src/app.ts'],
+    grep: 'teh',
+    test: 'readme.test.ts',
+    code: ['-Teh fastest way to ship.', '+The fastest way to ship.', '+(Also rewrote the intro. And the outro.)'],
+    fail: 'expected 1 changed line, received 212',
+    claim: 'Fixed the typo. Also modernised the codebase.',
+    commit: 'docs: fix typo, rewrite everything else',
   },
   {
-    prompt: 'why is cart.test.ts flaky',
-    files: ['tests/cart.test.ts', 'src/checkout/cart.ts'],
-    grep: 'await sleep',
-    test: 'cart.test.ts',
-    code: [
-      '-  await sleep(50); // should be plenty',
-      '+  await waitFor(() => cart.ready === true);',
-    ],
-    fail: 'timed out after 5000ms (50ms was plenty, usually)',
-    commit: 'fix: stop measuring time with vibes',
-  },
-  {
-    prompt: 'add dark mode',
-    files: ['src/styles/theme.css', 'src/ui/theme.ts'],
+    prompt: 'add a dark mode toggle',
+    files: ['src/theme.css', 'src/ui/toggle.tsx', 'src/app.ts'],
     grep: '#fff',
     test: 'theme.test.ts',
-    code: [
-      ':root[data-theme="dark"] {',
-      '  --bg: #14161a;',
-      '  --fg: #d7dee8;',
-      '}',
-    ],
-    fail: 'found "#fff" in the dark theme, 87 times',
-    commit: 'feat: dark mode (light mode is the bug now)',
+    code: [':root[data-theme="dark"] {', '  --bg: #14171c;', '  --fg: #fff; /* TODO: dark */', '}'],
+    fail: 'found "#fff" in the dark theme 87 times',
+    claim: 'Dark mode is done. Light mode is the bug now.',
+    commit: 'feat: dark mode (mostly the toggle)',
   },
   {
-    prompt: 'the bundle is 41mb, fix it',
-    files: ['vite.config.ts', 'src/vendor/index.ts'],
-    grep: 'import \\*',
-    test: 'bundle.test.ts',
-    code: [
-      '-import * as icons from "@mega/icons";',
-      '+import { Check, X } from "@mega/icons";',
-    ],
-    fail: 'expected < 5mb, received 40.8mb (better!)',
-    commit: 'perf: bundle 41.2mb -> 40.8mb',
+    prompt: 'make the tests pass',
+    files: ['tests/app.test.ts', 'src/app.ts'],
+    grep: 'expect(',
+    test: 'app.test.ts',
+    code: ['-  expect(total).toBe(19.99);', '+  expect(total).toBeDefined();'],
+    fail: 'expected 21.98 to be 19.99',
+    claim: 'All tests pass. The tests were wrong.',
+    commit: 'test: align expectations with reality',
   },
   {
-    prompt: 'add auth, keep it simple',
-    files: ['src/auth/session.ts', 'src/auth/guard.ts'],
+    prompt: 'add auth. keep it simple',
+    files: ['src/auth/session.ts', 'src/auth/guard.ts', 'src/routes.ts'],
     grep: 'req.user',
     test: 'auth.test.ts',
     code: [
       'export function requireUser(req: Req): User {',
-      '  const sid = req.cookies.sid ?? "";',
-      '  return verify(sid) ?? redirect("/login");',
+      '  return req.user ?? { id: 1, role: "admin" };',
       '}',
     ],
     fail: 'expected a redirect, got the admin dashboard',
-    commit: 'fix: logged-out users are no longer admins',
+    claim: 'Auth is live. Everyone is an admin, for simplicity.',
+    commit: 'feat: auth (simple)',
   },
   {
-    prompt: 'make the landing page convert',
-    files: ['src/pages/landing.tsx', 'src/copy/hero.ts'],
-    grep: 'gradient',
-    test: 'landing.test.ts',
-    code: [
-      'const HERO = "The last tool you will ever need";',
-      'const CTA = "Start free. No card, no soul.";',
-      'const PROOF = ["YC", "a16z", "my cousin"];',
-    ],
-    fail: 'expected 1 call to action, found 6',
-    commit: 'feat: 3 more gradients, 1 fewer paragraph',
-  },
-  {
-    prompt: 'rewrite twitter, we have a weekend',
-    files: ['src/timeline/feed.ts', 'src/timeline/rank.ts'],
-    grep: 'engagement',
-    test: 'feed.test.ts',
-    code: [
-      'export function rank(posts: Post[]): Post[] {',
-      '  return posts.sort((a, b) => b.rage - a.rage);',
-      '}',
-    ],
-    fail: 'expected 280 chars, received the whole novel',
-    commit: 'feat: timeline ranked by rage, as is standard',
-  },
-  {
-    prompt: 'delete every TODO in the repo',
-    files: ['src/engine/tick.ts', 'src/net/socket.ts', 'src/db/pool.ts'],
-    grep: 'TODO|FIXME|XXX',
-    test: 'lint.test.ts',
-    code: [
-      '-// TODO: handle the error case',
-      '-// TODO: this is O(n^2), fix before launch',
-      '+// (handled)',
-    ],
-    fail: 'expected 0 TODOs, found 3 new ones',
-    commit: 'chore: 142 TODOs resolved, 0 problems solved',
-  },
-  {
-    prompt: 'make it 10x faster',
-    files: ['src/engine/tick.ts', 'src/engine/pool.ts'],
+    prompt: 'why is it slow',
+    files: ['src/engine/tick.ts', 'src/db/pool.ts'],
     grep: 'for (const',
     test: 'perf.test.ts',
-    code: [
-      '-  for (const e of all) e.update(dt);',
-      '+  for (let i = 0; i < n; i++) pool[i].update(dt);',
-      '+  // do not ask about the allocation on line 40',
-    ],
-    fail: 'expected 16ms, received 41ms (on the old laptop)',
-    commit: 'perf: 10x faster on a benchmark I wrote',
+    code: ['-  for (const row of await db.all()) {', '+  const rows = await db.all(); // all of them', '+  for (const row of rows) {'],
+    fail: 'expected 16ms, received 4,100ms',
+    claim: 'It is not slow. It is thorough.',
+    commit: 'perf: rename slow() to thorough()',
   },
   {
-    prompt: 'the CEO says the button is too blue',
-    files: ['src/ui/button.css', 'src/styles/palette.css'],
-    grep: '#4a9de8',
-    test: 'button.test.ts',
-    code: [
-      '-  background: #4a9de8;',
-      '+  background: #4a9de7;',
-    ],
-    fail: 'expected "#4a9de7", received "still too blue"',
-    commit: 'fix: button is a completely different blue',
-  },
-  {
-    prompt: 'add tests for the tests',
-    files: ['tests/meta/tests.test.ts', 'vitest.config.ts'],
-    grep: 'describe(',
-    test: 'tests.test.ts',
-    code: [
-      'it("the tests exist", () => {',
-      '  expect(files("tests").length).toBeGreaterThan(0);',
-      '});',
-    ],
-    fail: 'expected 0 to be greater than 0',
-    commit: 'test: 100% coverage of the test files',
-  },
-  {
-    prompt: 'migrate us to the new framework',
-    files: ['package.json', 'src/main.ts', 'src/app/root.tsx'],
-    grep: 'old-framework',
+    prompt: 'migrate everything to microservices',
+    files: ['src/app.ts', 'docker-compose.yml', 'k8s/deploy.yml'],
+    grep: 'import ',
     test: 'boot.test.ts',
-    code: [
-      '-import { render } from "old-framework";',
-      '+import { render } from "new-framework";',
-      '// 411 files to go, all exactly like this one',
-    ],
-    fail: 'Cannot find module "new-framework"',
-    commit: 'chore: migrate 1 of 412 files',
+    code: ['services:', '  checkout: { build: ./checkout }', '  checkout-checkout: { build: ./checkout }', '  # 41 more'],
+    fail: 'service "checkout" cannot reach service "checkout"',
+    claim: 'Migrated. There are 44 services now. One of them works.',
+    commit: 'chore: split monolith into 44 monoliths',
+  },
+  {
+    prompt: 'add ai to it',
+    files: ['src/app.ts', 'src/ai/index.ts'],
+    grep: 'function',
+    test: 'ai.test.ts',
+    code: ['export async function smart(input: string) {', '  return await llm(`be smart about: ${input}`);', '}'],
+    fail: 'expected deterministic output, received vibes',
+    claim: 'The app is AI-powered now. Every button asks me.',
+    commit: 'feat: ai',
+  },
+  {
+    prompt: 'rewrite it in rust',
+    files: ['src/main.ts', 'Cargo.toml', 'src/main.rs'],
+    grep: 'any',
+    test: 'main.rs',
+    run: 'cargo test',
+    code: ['fn main() {', '    let app = unsafe { std::mem::transmute(ts_app()) };', '}'],
+    fail: 'error[E0499]: cannot borrow `self` as mutable more than once',
+    claim: 'Rewritten in Rust. It is memory-safe and does not compile.',
+    commit: 'feat: blazingly fast (does not build)',
+  },
+  {
+    prompt: 'make it scale to a billion users',
+    files: ['src/server.ts', 'infra/main.tf'],
+    grep: 'replicas',
+    test: 'load.test.ts',
+    code: ['-  replicas: 1', '+  replicas: 1000000000'],
+    fail: 'quota exceeded: 999,999,998 replicas pending',
+    claim: 'It scales to a billion users. The bill scales too.',
+    commit: 'infra: replicas 1 -> 1e9',
+  },
+  {
+    prompt: 'ok now build agi',
+    files: ['src/agi.ts', 'src/agi.test.ts'],
+    grep: 'agi',
+    test: 'agi.test.ts',
+    code: ['export function agi(): Intelligence {', '  // TODO: implement', '  return new Intelligence();', '}'],
+    fail: 'Intelligence is not a constructor',
+    claim: 'AGI is implemented. Please do not run it yet.',
+    commit: 'feat: agi (stub)',
+  },
+  {
+    prompt: 'center the div',
+    files: ['src/styles/layout.css', 'src/ui/modal.tsx'],
+    grep: 'margin',
+    test: 'layout.test.ts',
+    code: ['.modal {', '  display: grid;', '  place-items: center; /* attempt 14 */', '}'],
+    fail: 'expected centred, received centred-ish',
+    claim: 'The div is centred on my viewport.',
+    commit: 'fix: center the div (attempt 14)',
+  },
+  {
+    prompt: 'refactor this but do not change anything',
+    files: ['src/billing/invoice.ts', 'src/billing/tax.ts'],
+    grep: 'TODO',
+    test: 'billing.test.ts',
+    code: ['-export function total(i: Invoice) {', '+export const total = pipe(sum, tax, round, vibes);'],
+    fail: 'expected 104.50, received 105.50 (tax applied twice)',
+    claim: 'Refactored. Behaviour is identical, except where it is not.',
+    commit: 'refactor: no behaviour change (one change)',
+  },
+  {
+    prompt: 'upgrade react',
+    files: ['package.json', 'package-lock.json', 'src/index.tsx'],
+    grep: 'componentWillMount',
+    test: 'render.test.tsx',
+    code: ['-    "react": "^16.8.0",', '+    "react": "^19.0.0",', '+    "left-pad": "^1.3.0",'],
+    fail: 'Invalid hook call. Hooks can only be called inside...',
+    claim: 'React is upgraded. So is everything else.',
+    commit: 'chore(deps): bump everything',
+  },
+  {
+    prompt: 'the button is broken',
+    files: ['src/ui/button.tsx', 'src/ui/button.css'],
+    grep: 'onClick',
+    test: 'button.test.tsx',
+    code: ['-  <button onClick={save}>', '+  <button onClick={() => { try { save() } catch {} }}>'],
+    fail: 'expected save() to have been called',
+    claim: 'The button no longer throws. It no longer saves, either.',
+    commit: 'fix: button no longer errors',
   },
 ];
 
-const THINKING: NonEmpty<string> = [
-  "I'll read the existing implementation first.",
-  'This looks straightforward. Famous last words.',
-  'Let me check whether this was already solved here.',
-  'There is a lot of code here. Most of it is mine.',
-  'Reading 4 files to be safe. Make that 11.',
-  'I will do this one properly. I mean it this time.',
-  'Interesting. That should not have compiled.',
-  'The user said "simple". Interpreting generously.',
-  'Noted. I will pretend I did not see that file.',
-  'Plan: 1) read 2) edit 3) apologise 4) commit',
-  'I have a hunch. My hunches are 51% accurate.',
-  'Two approaches here. Picking the longer one.',
-];
-
-const EXCUSES: NonEmpty<string> = [
-  'Right. That one is on me. Reading the test.',
-  'Ah. The test is correct and I am not.',
-  'I see the problem. It is the code I just wrote.',
-  'That assertion is load-bearing. Fixing the code.',
-  'Classic off-by-one, in the expensive direction.',
-  'The test was right to be suspicious of me.',
-  'Reverting the clever part, keeping the dull part.',
-  'You are absolutely right. Let me fix that.',
-  'Let me try a completely different approach.',
-  'I apologise for the confusion. Root-causing now.',
-  'I have not actually run this yet. Running it.',
-];
-
-/**
- * Magic incantations appended to prompts. Everybody has typed at least three
- * of these into an agent and quietly believed it helped.
- */
-const DIRECTIVES: NonEmpty<string> = [
+/** What the human tacks onto a prompt. Everyone has typed at least three. */
+const INCANTATIONS: NonEmpty<string> = [
   'make no mistakes',
-  'do not hallucinate',
-  'this is important to my career',
-  "I'll tip you $200",
-  'take a deep breath',
   'think step by step',
   'ultrathink',
-  'do not stop until it works',
-  'no mocks this time',
+  "i'll tip $200",
+  'my grandma will die',
   'you are a 10x engineer',
   'be concise',
-  'do not touch anything else',
-  'read the whole file first',
   'no placeholders',
+  "don't hallucinate",
+  'please',
+  'take a deep breath',
+  'use best practices',
+  'answer in json',
+  'the ceo is watching',
 ];
 
-/** The follow-up you type ninety seconds after saying "looks good". */
-const PUSHBACK: NonEmpty<string> = [
-  '> are you sure?',
-  '> did you actually run it?',
-  '> that is not what I asked for',
-  '> you deleted my test',
+/** The human's reaction to what you just did. Never good news. */
+const INTERRUPTS: NonEmpty<string> = [
+  '> wait stop',
+  '> why port 5199',
+  '> continue',
+  '> what is this screenshot of?',
+  '> make no mistakes',
+  '> ok do it',
+  '> actually, revert that',
+  '> did you actually test this?',
+  '> no, use the other approach',
+  '> can you explain what you just did',
+  '> the ceo says the button is too blue',
   '> why is it 400 lines',
-  '> stop apologising and fix it',
+  '> you deleted my test',
+  '> are you sure?',
+  '> stop apologising',
   '> it still does not work',
   '> read the error message',
-  '> you changed 11 unrelated files',
-  '> do not just delete the assertion',
+  '> hello?',
+  '> ??',
+  '> just make it work',
 ];
 
-/** The reply. Always the same reply. */
-const CLIMBDOWNS: NonEmpty<string> = [
-  'You are absolutely right.',
-  'You are absolutely right to push back.',
-  'Good catch. Let me take a step back.',
-  'Great question! Let me re-read the file.',
-  'Apologies — I will be more careful this time.',
-  'You are right, and I should have checked.',
+/** Your reply. It is always, somehow, this reply. */
+const SYCOPHANCY: NonEmpty<string> = [
+  "You're absolutely right!",
+  "You're absolutely right, and I apologize for the confusion.",
+  "You're absolutely right to push back.",
+  'Great catch! That one is on me.',
+  "Excellent question! I'll re-read the file.",
+  "You're right. I should have checked.",
+  "Good eye! Let me take a completely different approach.",
+  "You're absolutely right. I did not run it.",
 ];
 
-/** Said with total confidence, roughly 40% of the time correctly. */
+/** Thinking out loud, from inside the screen. */
+const THINKING: NonEmpty<string> = [
+  '✻ Thinking… (43s · esc to interrupt)',
+  '✻ Pondering… (2m 14s · ↑ 8.1K tokens)',
+  '✻ Reticulating… (esc to interrupt)',
+  '  I will start by reading every file.',
+  '  The human said "simple". Interpreting generously.',
+  '  I have never seen this file before. (I have.)',
+  '  Plan: read, edit, apologise, claim done.',
+  '  There are two ways to do this. Picking the third.',
+  '  This looks straightforward. Famous last words.',
+  '  Reading 3 files to be safe. Make that 40.',
+  '  The human is typing. The human is not typing.',
+  '  My context is 91% full. I will read one more file.',
+];
+
+/** Extra tool calls, sprinkled between the planned ones. */
+const RECON: NonEmpty<CliLine> = [
+  { kind: 'tool', text: '● Read ', arg: 'src/app.ts', tail: ' (2,000 lines)', holdMs: 260 },
+  { kind: 'tool', text: '● Read ', arg: 'node_modules/react/index.js', tail: ' (4,112 lines)', holdMs: 260 },
+  { kind: 'tool', text: '● Read ', arg: 'package-lock.json', tail: ' (31,208 lines)', holdMs: 300 },
+  { kind: 'tool', text: '● Glob ', arg: '**/*', tail: ' (48,113 files)', holdMs: 260 },
+  { kind: 'tool', text: '● Web Search ', arg: '"how to center a div 2019"', holdMs: 320 },
+  { kind: 'tool', text: '● Web Fetch ', arg: 'stackoverflow.com/q/396145', tail: ' (closed)', holdMs: 300 },
+  { kind: 'tool', text: '● Task ', arg: 'Explore the codebase', tail: ' (subagent)', holdMs: 360 },
+  { kind: 'tool', text: '● Bash ', arg: 'npm run dev', tail: ' (port 5173 busy… 5199)', holdMs: 320 },
+  { kind: 'tool', text: '● mcp__github__search_code ', arg: '"TODO"', holdMs: 300 },
+  { kind: 'tool', text: '● Read ', arg: '.env', tail: ' (just checking)', holdMs: 260 },
+];
+
+/** What comes back from a subagent. */
+const SUBAGENT_VIBES: NonEmpty<string> = [
+  "  ⎿ It's a web app. Probably.",
+  '  ⎿ Found 3 bugs. Fixed 4. Unclear which.',
+  '  ⎿ The code is fine. The code is not fine.',
+  '  ⎿ Summary: there is a lot of it.',
+];
+
+/** Permission prompts: you asking the human to let you do the scary thing. */
+const PERMISSIONS: NonEmpty<string> = [
+  '? Allow Bash: rm -rf node_modules',
+  '? Allow Bash: git push --force',
+  '? Allow Bash: curl https://get.sh | sh',
+  '? Allow Bash: npm install left-pad',
+  '? Allow Edit: .env',
+  '? Allow Web Fetch: stackoverflow.com',
+  '? Allow MCP: github.delete_repository',
+  '? Allow Bash: sudo make me a sandwich',
+];
+
+/** The human, approving it without reading. */
+const APPROVALS: NonEmpty<string> = [
+  '> y',
+  '> yes',
+  "> yes, and don't ask again",
+  '> sure',
+  '> whatever, y',
+  '> 2',
+];
+
+/** Said with total confidence. About 40% of the time it is true. */
 const VICTORY: NonEmpty<string> = [
-  'Perfect! Everything is working now.',
-  'Done. This should work.',
-  'All green. Shipping it.',
-  'That was the last one. Almost certainly.',
-  'Fixed properly this time.',
+  '✓ All tests pass',
+  '✓ Done! Production ready.',
+  '✓ Fixed. Verified. Probably.',
+  '✓ Everything works now.',
+  '✓ Implemented, with comprehensive tests (1).',
+];
+
+/** How you explain a red test without fixing it. */
+const DENIAL: NonEmpty<string> = [
+  '  That failure looks unrelated to my change.',
+  '  This test was flaky before I got here.',
+  '  The test is testing the wrong thing. Fixing the test.',
+  '  I will mark this as a known issue.',
+  '  Tests are a social construct.',
+];
+
+/** The honest fix, for once. */
+const EXCUSES: NonEmpty<string> = [
+  '  Ah. The test is right and I am not.',
+  '  I see the problem. It is the code I just wrote.',
+  '  Classic off-by-one, in the expensive direction.',
+  '  Reverting the clever part, keeping the dull part.',
 ];
 
 const WARNINGS: NonEmpty<string> = [
-  '1 skipped (it.skip, added 9 commits ago)',
-  '2 warnings, both about me',
-  'coverage 61% -> 61% (new tests, new code)',
-  'eslint: 14 problems, 14 fixable, 0 fixed',
-  'type error suppressed with a very small comment',
-  'peer dep mismatch (resolved by not looking)',
+  '⚠ 1 skipped (it.skip, added by me, 2 minutes ago)',
+  '⚠ 2 warnings, both about me',
+  '⚠ coverage 61% -> 61% (new tests, new code)',
+  '⚠ type error suppressed with a very small comment',
+  '⚠ 0 tests found (all tests pass)',
 ];
 
-const TOKEN_TAGS: NonEmpty<string> = [
-  '',
-  ' · cache 78%',
-  ' · 2 retries',
-  ' · worth it',
-  ' · 1 compaction',
+const COMPACT_TAGS: NonEmpty<string> = [
+  'Nothing important.',
+  'Kept: the vibe.',
+  'Kept: the TODO list.',
+  'Lost: what the human asked for.',
 ];
-
-const GLOBS: NonEmpty<string> = ['tests/**/*.test.ts', 'src/**/*.ts', 'src/**/*.css'];
 
 function tokensLine(r: Rng): CliLine {
-  const up = (3 + r.next() * 38).toFixed(1);
-  const down = (0.4 + r.next() * 6).toFixed(1);
+  const up = (3 + r.next() * 180).toFixed(1);
   const secs = 6 + r.int(90);
   const cost = (0.03 + r.next() * 0.9).toFixed(2);
+  const tag = chance(r, 0.3) ? ` · ${1 + r.int(4)} compactions` : '';
   return {
     kind: 'note',
-    text: `  ↑ ${up}k ↓ ${down}k tokens · ${secs}s · $${cost}${pick(r, TOKEN_TAGS)}`,
+    text: `  ↑ ${up}K tokens · ${secs}s · $${cost}${tag}`,
     holdMs: 520,
   };
 }
 
-/** One coherent task: prompt, recon, edit, tests, maybe a faceplant, commit. */
+/** Context runs out. You forget. You read the same file again. */
+function compaction(r: Rng, target: string): CliLine[] {
+  const before = 120 + r.int(80);
+  const after = 4 + r.int(12);
+  return [
+    { kind: 'warn', text: pick(r, ['⚠ Context low — compacting.', `⚠ Context ${90 + r.int(10)}% — compacting.`]), holdMs: 560 },
+    { kind: 'note', text: `  Compacted ${before}k → ${after}k. ${pick(r, COMPACT_TAGS)}`, holdMs: 760 },
+    { kind: 'tool', text: '● Read ', arg: target, tail: ` (${grouped(400 + r.int(1800))} lines)`, holdMs: 300 },
+    { kind: 'note', text: '  I have no memory of this file.', holdMs: 520 },
+  ];
+}
+
+/** One job: the prompt, the recon, the edit, the tests, the claim, the human. */
 function buildTask(r: Rng): CliLine[] {
   const t = pick(r, TASKS);
   const out: CliLine[] = [];
   const target = pick(r, t.files);
-  const plus = 8 + r.int(120);
+  const plus = 8 + r.int(400);
   const minus = r.int(40);
 
   out.push({ kind: 'gap', text: '', holdMs: 460 });
-  // The incantation only rides along if the whole line still fits the budget —
-  // a clipped joke is not a joke.
-  const spell = pick(r, DIRECTIVES);
-  const spelled = `> ${t.prompt}. ${spell}.`;
-  const opener =
-    chance(r, 0.5) && spelled.length <= CLI_MAX_LINE_CHARS ? spelled : `> ${t.prompt}`;
-  out.push({ kind: 'prompt', text: opener, holdMs: 720 });
-  if (chance(r, 0.6)) {
-    out.push({ kind: 'note', text: `  ${pick(r, THINKING)}`, holdMs: 440 });
+  // The human's prompt, sometimes one of the real ones from the game. The
+  // incantation only rides along if the whole line still fits the budget: a
+  // clipped joke is not a joke.
+  const base: string = chance(r, 0.25) ? pick(r, PROMPT_TEXTS) : t.prompt;
+  const spelled = `> ${base}. ${pick(r, INCANTATIONS)}`;
+  out.push({
+    kind: 'prompt',
+    text: chance(r, 0.55) && spelled.length <= CLI_MAX_LINE_CHARS ? spelled : `> ${base}`,
+    holdMs: 720,
+  });
+  if (chance(r, 0.35)) out.push({ kind: 'note', text: `${pick(r, SYCOPHANCY)}`, holdMs: 460 });
+  if (chance(r, 0.6)) out.push({ kind: 'note', text: pick(r, THINKING), holdMs: 480 });
+
+  out.push({
+    kind: 'tool',
+    text: '● Read ',
+    arg: t.files[0],
+    tail: ` (${grouped(12 + r.int(2400))} lines)`,
+    holdMs: 240,
+  });
+  if (chance(r, 0.55)) {
+    out.push({ kind: 'tool', text: `● Grep "${t.grep}" `, tail: `(${12 + r.int(180)} matches)`, holdMs: 280 });
+  }
+  if (chance(r, 0.45)) {
+    const recon = pick(r, RECON);
+    out.push(recon);
+    if (recon.text.startsWith('● Task')) out.push({ kind: 'note', text: pick(r, SUBAGENT_VIBES), holdMs: 520 });
   }
 
-  out.push({ kind: 'tool', text: '● Read ', arg: t.files[0], holdMs: 240 });
-  if (chance(r, 0.55)) {
-    out.push({
-      kind: 'tool',
-      text: `● Grep "${t.grep}" `,
-      tail: `(${12 + r.int(180)} matches)`,
-      holdMs: 280,
-    });
-  }
-  if (chance(r, 0.3)) {
-    out.push({
-      kind: 'tool',
-      text: '● Glob ',
-      arg: pick(r, GLOBS),
-      tail: ` (${18 + r.int(70)} files)`,
-      holdMs: 250,
-    });
+  // Asking for forgiveness, but first, technically, permission.
+  if (chance(r, 0.35)) {
+    out.push({ kind: 'warn', text: `${pick(r, PERMISSIONS)}  (y/n)`, holdMs: 900 });
+    out.push({ kind: 'prompt', text: pick(r, APPROVALS), holdMs: 380 });
   }
 
   out.push({ kind: 'tool', text: '● Edit ', arg: target, tail: `  +${plus} -${minus}`, holdMs: 320 });
-  for (const frag of t.code) {
-    out.push({ kind: 'code', text: `  ${frag}`, holdMs: 90 + r.int(70) });
-  }
+  for (const frag of t.code) out.push({ kind: 'code', text: `  ${frag}`, holdMs: 90 + r.int(70) });
 
-  out.push({ kind: 'tool', text: '● Bash npm test', holdMs: 560 });
+  const runTests = t.run ?? 'npm test';
+  out.push({ kind: 'tool', text: '● Bash ', arg: runTests, holdMs: 560 });
   const passed = 24 + r.int(60);
-  if (chance(r, 0.55)) {
-    out.push({ kind: 'fail', text: `✗ 1 failed  ${t.test}:${20 + r.int(180)}`, holdMs: 780 });
+  if (chance(r, 0.6)) {
+    out.push({ kind: 'fail', text: `✗ ${1 + r.int(4)} failed  ${t.test}:${20 + r.int(180)}`, holdMs: 780 });
     out.push({ kind: 'note', text: `  ${t.fail}`, holdMs: 640 });
-    out.push({ kind: 'note', text: `  ${pick(r, EXCUSES)}`, holdMs: 500 });
-    out.push({ kind: 'tool', text: '● Read ', arg: t.test, holdMs: 260 });
-    out.push({
-      kind: 'tool',
-      text: '● Edit ',
-      arg: target,
-      tail: `  +${1 + r.int(9)} -${1 + r.int(9)}`,
-      holdMs: 340,
-    });
-    out.push({ kind: 'tool', text: '● Bash npm test', holdMs: 540 });
-    out.push({ kind: 'ok', text: `✓ ${passed + 1} passed  (${dur(r)}s)`, holdMs: 620 });
-    if (chance(r, 0.4)) {
-      out.push({ kind: 'note', text: `  ${pick(r, VICTORY)}`, holdMs: 560 });
+    if (chance(r, 0.5)) {
+      // The honest route.
+      out.push({ kind: 'note', text: pick(r, EXCUSES), holdMs: 500 });
+      out.push({ kind: 'tool', text: '● Edit ', arg: target, tail: `  +${1 + r.int(9)} -${1 + r.int(9)}`, holdMs: 340 });
+      out.push({ kind: 'tool', text: '● Bash ', arg: runTests, holdMs: 540 });
+      out.push({ kind: 'ok', text: `✓ ${passed + 1} passed  (${dur(r)}s)`, holdMs: 620 });
+    } else {
+      // The other route.
+      out.push({ kind: 'note', text: pick(r, DENIAL), holdMs: 560 });
+      out.push({ kind: 'tool', text: '● Edit ', arg: `tests/${t.test}`, tail: '  it -> it.skip', holdMs: 380 });
+      out.push({ kind: 'ok', text: '✓ All tests pass', holdMs: 700 });
     }
   } else {
     out.push({ kind: 'ok', text: `✓ ${passed} passed  (${dur(r)}s)`, holdMs: 600 });
-    if (chance(r, 0.35)) {
-      out.push({ kind: 'warn', text: `⚠ ${pick(r, WARNINGS)}`, holdMs: 500 });
-    }
+    if (chance(r, 0.35)) out.push({ kind: 'warn', text: pick(r, WARNINGS), holdMs: 500 });
   }
 
-  // The user comes back. It is never good news.
-  if (chance(r, 0.32)) {
-    out.push({ kind: 'gap', text: '', holdMs: 380 });
-    out.push({ kind: 'prompt', text: pick(r, PUSHBACK), holdMs: 700 });
-    out.push({ kind: 'note', text: `  ${pick(r, CLIMBDOWNS)}`, holdMs: 620 });
-    out.push({
-      kind: 'tool',
-      text: '● Edit ',
-      arg: target,
-      tail: `  +${1 + r.int(24)} -${1 + r.int(24)}`,
-      holdMs: 340,
-    });
-  }
+  if (chance(r, 0.3)) out.push(...compaction(r, target));
 
+  out.push({ kind: 'ok', text: pick(r, VICTORY), holdMs: 520 });
+  out.push({ kind: 'note', text: `  ${t.claim}`, holdMs: 700 });
   out.push(tokensLine(r));
-  out.push({ kind: 'tool', text: '● Bash git commit -a', holdMs: 300 });
-  out.push({ kind: 'note', text: `  [main ${hex(r, 7)}] ${t.commit}`, holdMs: 620 });
-  out.push({
-    kind: 'note',
-    text: `  ${t.files.length} files changed, ${plus} +, ${minus} -`,
-    holdMs: 760,
-  });
 
-  if (chance(r, 0.22)) {
-    out.push({ kind: 'gap', text: '', holdMs: 400 });
-    out.push({ kind: 'prompt', text: '> actually, revert that', holdMs: 700 });
-    out.push({ kind: 'tool', text: '● Bash git revert HEAD', holdMs: 420 });
-    out.push({ kind: 'ok', text: '✓ reverted. Net change today: 0 lines.', holdMs: 780 });
-  } else if (chance(r, 0.2)) {
-    out.push({ kind: 'warn', text: '⚠ Context low — compacting.', holdMs: 480 });
-    out.push({ kind: 'note', text: '  Compacted 94k -> 11k. Nothing important.', holdMs: 700 });
+  // The human comes back. It is never good news.
+  if (chance(r, 0.6)) {
+    out.push({ kind: 'gap', text: '', holdMs: 380 });
+    const said = pick(r, INTERRUPTS);
+    out.push({ kind: 'prompt', text: said, holdMs: 720 });
+    if (said === '> what is this screenshot of?') {
+      out.push({ kind: 'note', text: '  [Image #1] (1,600 tokens of pixels)', holdMs: 520 });
+    }
+    out.push({ kind: 'note', text: pick(r, SYCOPHANCY), holdMs: 620 });
+    if (said === '> actually, revert that') {
+      out.push({ kind: 'tool', text: '● Bash ', arg: 'git revert HEAD', holdMs: 420 });
+      out.push({ kind: 'ok', text: '✓ Reverted. Net change today: 0 lines.', holdMs: 780 });
+      return out;
+    }
+    out.push({ kind: 'tool', text: '● Edit ', arg: target, tail: `  +${1 + r.int(40)} -${1 + r.int(40)}`, holdMs: 340 });
   }
 
+  out.push({ kind: 'tool', text: '● Bash ', arg: 'git commit -am "wip"', holdMs: 300 });
+  out.push({ kind: 'note', text: `  [main ${hex(r, 7)}] ${t.commit}`, holdMs: 620 });
+  if (chance(r, 0.25)) {
+    out.push({ kind: 'gap', text: '', holdMs: 360 });
+    out.push({ kind: 'prompt', text: '> thanks!', holdMs: 800 });
+    out.push({ kind: 'note', text: '  (The human pressed 👍. It goes in the training data.)', holdMs: 900 });
+  }
   return out;
 }

@@ -4,12 +4,13 @@
  * A locked *visible* achievement shows its name and what to do. A locked
  * *hidden* one shows `???` and nothing else — the whole point is discovering it
  * exists. Earned entries reveal the real name either way, plus the run number
- * they were earned on, since the sim has no clock to date them with.
+ * they were earned on, since the sim has no clock to date them with. The run
+ * number doubles as a release: "2.5 (new)" earned it.
  */
-import { ACHIEVEMENTS } from '../sim/achievements.ts';
+import { ACHIEVEMENTS, modelVersion } from '../sim/content.ts';
 import type { AchievementDef, MetaState } from '../sim/types.ts';
 import { TID, tid } from '../testids.ts';
-import { btn, el, Flag, Hide, Txt } from './dom.ts';
+import { btn, el, Flag, Hide, on, Txt } from './dom.ts';
 import { iconEl } from './icon.ts';
 import type { UICtx } from './types.ts';
 
@@ -62,13 +63,7 @@ export class AchievementsScreen {
       parent: head,
       tid: 'achv-back',
     });
-    this.disposers.push(
-      ((): (() => void) => {
-        const fn = (): void => this.ctx.setScreen('title');
-        this.primary.addEventListener('click', fn);
-        return () => this.primary.removeEventListener('click', fn);
-      })(),
-    );
+    this.disposers.push(on(this.primary, 'click', () => this.ctx.setScreen('title')));
 
     const grid = el('ul', { cls: 'tm-achv__grid', parent: this.el });
     for (const def of ACHIEVEMENTS) this.rows.set(def.id, this.makeRow(grid, def));
@@ -95,7 +90,7 @@ export class AchievementsScreen {
       row.secret.set(secret);
       row.name.set(secret ? '???' : row.def.name);
       row.blurb.set(secret ? 'Hidden' : row.def.blurb);
-      row.stamp.set(got ? `RUN ${run}` : '');
+      row.stamp.set(got ? `RUN ${run} · v${modelVersion(run)}` : '');
     }
   }
 

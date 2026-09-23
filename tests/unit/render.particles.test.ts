@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { C_AMBER, PARTICLE_CAP, ParticleSystem } from '../../src/render/particles.ts';
+import { FLOOR_Y } from '../../src/render/layout.ts';
 import { createMockCtx } from './render.mock-ctx.ts';
 
 const ctx = () =>
@@ -107,7 +108,9 @@ describe('simulation and drawing', () => {
 
   it('draws every live particle kind without throwing', () => {
     const p = new ParticleSystem(128);
-    p.spawnText(10, 10, '+42 SLOP', { color: C_AMBER, scale: 2, shake: 2 });
+    p.spawnText(10, 10, '+42', { color: C_AMBER, scale: 2, shake: 2 });
+    p.spawnToken(160, 140, 30, FLOOR_Y - 20);
+    p.burstGlass(90, 70, 6);
     p.spawnMote(20, 20);
     p.burstConfetti(30, 30, 8);
     p.burstShards(40, 40, 8);
@@ -146,5 +149,48 @@ describe('simulation and drawing', () => {
     }
     expect(p.poolSize).toBe(1024);
     expect(p.count).toBeLessThanOrEqual(1024);
+  });
+});
+
+describe('tokens fly into the pile', () => {
+  it('travel from where they were made to where they land, then expire', () => {
+    const p = new ParticleSystem(8);
+    p.spawnToken(160, 140, 20, 120, { ttl: 0.5, arc: 10, size: 5 });
+    const c = createMockCtx(document.createElement('canvas'));
+    const at = (): readonly unknown[] => {
+      c.reset();
+      p.draw(c as unknown as CanvasRenderingContext2D, 0);
+      return c.ops('fillRect')[0]!.args;
+    };
+    p.update(0.001);
+    const start = at();
+    expect(Number(start[0])).toBeGreaterThan(150);
+    for (let i = 0; i < 24; i++) p.update(0.02);
+    const near = at();
+    // Most of the way to the landing spot, and no further.
+    expect(Number(near[0])).toBeLessThan(40);
+    expect(Number(near[0])).toBeGreaterThanOrEqual(15);
+    for (let i = 0; i < 5; i++) p.update(0.02);
+    expect(p.count).toBe(0);
+  });
+
+  it('are faceless: a lit square with a dark heart, never eyes', () => {
+    const p = new ParticleSystem(4);
+    p.spawnToken(10, 10, 50, 50, { size: 5 });
+    p.update(0.01);
+    const c = createMockCtx(document.createElement('canvas'));
+    p.draw(c as unknown as CanvasRenderingContext2D, 0);
+    const fills = c.ops('set:fillStyle').map((o) => String(o.args[0]).toLowerCase());
+    expect(fills).not.toContain('#f2f6fb');
+  });
+});
+
+describe('glass shards', () => {
+  it('fall with gravity and respect the pool', () => {
+    const p = new ParticleSystem(32);
+    p.burstGlass(100, 50, 500);
+    expect(p.count).toBe(32);
+    for (let i = 0; i < 200; i++) p.update(0.05);
+    expect(p.count).toBe(0);
   });
 });

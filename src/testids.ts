@@ -45,6 +45,8 @@ export const TID = {
   incidentName: 'incident-name',
   incidentTimer: 'incident-timer',
   activeCards: 'active-cards',
+  /** `${activeCard}-${cardId}`: one chip in the active-cards strip. */
+  activeCard: 'active-card',
 
   // shop
   shop: 'shop',
@@ -100,6 +102,9 @@ export const TID = {
   metaBuy: 'meta-buy',
   metaTip: 'meta-tip',
   startRun: 'start-run',
+  /** Training screen's own start button, and its way back to the title. */
+  metaStart: 'meta-start',
+  metaBack: 'meta-back',
   achievementsScreen: 'achievements-screen',
   achievementsButton: 'title-achievements',
   achievementsCount: 'achievements-count',
@@ -109,11 +114,23 @@ export const TID = {
   /** `${achievementPopupCard}-${id}` */
   achievementPopupCard: 'achievement-popup-card',
   titleScreen: 'title-screen',
+  /** Title's TRAINING button and its stats line. */
+  titleMeta: 'title-meta',
+  titleStats: 'title-stats',
   /** One-time notice that a Tokenmaxxing 1 save was found. */
   legacyNotice: 'legacy-notice',
+  /** Dismisses the legacy notice. */
+  legacyOk: 'legacy-ok',
+
+  /** The title's one-paragraph Training pitch. */
+  titleMetaPitch: 'title-meta-pitch',
+  /** Back to the title from the achievements screen. */
+  achievementsBack: 'achv-back',
 
   // about / credits
   aboutButton: 'about-button',
+  /** The About button in the top bar (the title has its own). */
+  topbarAbout: 'topbar-about',
   aboutModal: 'about-modal',
   aboutClose: 'about-close',
   kofiLink: 'kofi-link',
@@ -137,6 +154,7 @@ export const TID = {
   // options / debug
   optionsButton: 'options-button',
   optionsPanel: 'options-panel',
+  optionsClose: 'options-close',
   muteToggle: 'mute-toggle',
   reducedMotion: 'reduced-motion',
   resetSave: 'reset-save',

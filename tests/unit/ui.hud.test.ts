@@ -1,92 +1,342 @@
 /**
- * HUD behaviour: wallet roll-up, ship bar, CI deadline burndown, incident
- * stack and the active-card strip.
+ * The HUD band: wallet, prompt, the context window, the human's patience,
+ * "You're absolutely right", the four-faced report button, the 👍 tally, tech
+ * debt and the model version.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { projectDeadlineMs, projectRequirement } from '../../src/sim/content.ts';
-import type { RunState } from '../../src/sim/types.ts';
+import { BALANCE, promptAt } from '../../src/sim/content.ts';
+import { formatTokens } from '../../src/sim/index.ts';
 import { TID } from '../../src/testids.ts';
-import { fmtBarCost, fmtNum, fmtTime } from '../../src/ui/format.ts';
-import { createUI } from '../../src/ui/index.ts';
+import { CONTEXT_AMBER_AT, CONTEXT_RED_AT, promptLabel, reportView } from '../../src/ui/hud.ts';
 import { RollUp } from '../../src/ui/rollup.ts';
 import {
-  computeScale,
-  DRAWER_MAX_VH,
-  MIN_SCALE,
-  UNITS_H_STACKED,
-  UNITS_H_STACKED_DRAWER,
-  UNITS_W_STACKED,
-} from '../../src/ui/scale.ts';
-import type { UI } from '../../src/ui/types.ts';
-import {
-  all,
   isHidden,
   makeDerived,
-  makeFakeSim,
-  makeIncident,
   makeRun,
+  makeUnlocked,
+  mountUI,
   must,
-  q,
-  type FakeSim,
+  text,
+  unmountAll,
 } from './ui.fake-sim.ts';
 
-let mounted: UI | null = null;
-let host: HTMLElement | null = null;
-let clock = 0;
+afterEach(unmountAll);
 
-interface Mounted {
-  ui: UI;
-  root: HTMLElement;
-  sim: FakeSim;
-  frame: () => void;
-}
+const reportBtn = (root: HTMLElement): HTMLButtonElement => must(root, TID.reportButton) as HTMLButtonElement;
 
-function mount(over: Partial<RunState> = {}): Mounted {
-  clock = 0;
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const sim = makeFakeSim({ run: makeRun(over) });
-  const ui = createUI({ root, sim, screen: 'run', now: () => clock });
-  mounted = ui;
-  host = root;
-  const frame = (): void => ui.update(sim.run, makeDerived(sim.run), sim.meta);
-  frame();
-  return { ui, root, sim, frame };
-}
+describe('wallet', () => {
+  it('shows the tokens with the sim formatter, the rate line and click power', () => {
+    const m = mountUI({ run: makeRun({ tokens: 184_200 }) });
+    m.derived = { idleRate: 2_100, clickPower: 64 };
+    m.frame();
+    expect(text(m.root, TID.tokens)).toBe(formatTokens(184_200));
+    expect(text(m.root, TID.tokenRate)).toBe(`${formatTokens(2_100)} TOK/S`);
+    expect(text(m.root, TID.clickPower)).toBe('+64/CLICK');
+  });
 
-afterEach(() => {
-  mounted?.destroy();
-  mounted = null;
-  host?.remove();
-  host = null;
-  document.body.replaceChildren();
+  it('keeps a decimal on small rates instead of printing a first Grep as 0', () => {
+    const m = mountUI({ derived: { idleRate: 0.8 } });
+    expect(text(m.root, TID.tokenRate)).toBe('0.8 TOK/S');
+  });
+
+  it('hides the crit readout at base and shows crit and one-shot once raised', () => {
+    const m = mountUI();
+    expect(isHidden(must(m.root, TID.critChance))).toBe(true);
+    m.derived = { critChance: 0.1, oneShotChance: 0.05 };
+    m.frame();
+    expect(isHidden(must(m.root, TID.critChance))).toBe(false);
+    expect(text(m.root, TID.critChance)).toBe('CRIT 10% · 1-SHOT 5%');
+  });
+
+  it('colours the incident risk once tech debt pushes it up', () => {
+    const m = mountUI({ derived: { incidentRateMult: 1.2 } });
+    const risk = must(m.root, TID.incidentRisk);
+    expect(risk.textContent).toBe('RISK ×1.20');
+    expect(risk.classList.contains('is-hot')).toBe(true);
+  });
 });
 
-describe('formatting', () => {
-  it('compacts big numbers without locale drift', () => {
-    expect(fmtNum(0)).toBe('0');
-    expect(fmtNum(947)).toBe('947');
-    expect(fmtNum(1000)).toBe('1.00k');
-    expect(fmtNum(1_240)).toBe('1.24k');
-    expect(fmtNum(88_100_000)).toBe('88.1M');
-    expect(fmtNum(4.6e8)).toBe('460M');
-    expect(fmtNum(Infinity)).toBe('∞');
+describe('prompt line', () => {
+  it('numbers the prompt out of ten and quotes what the human typed', () => {
+    const m = mountUI({ run: makeRun({ promptIndex: 2 }) });
+    expect(text(m.root, TID.promptNum)).toBe('PROMPT 3/10');
+    expect(text(m.root, TID.promptText)).toBe(`"${promptAt(2).text}"`);
   });
 
-  it('caps the ship-bar cost hint instead of printing -771%', () => {
-    expect(fmtBarCost(0.18)).toBe('18%');
-    expect(fmtBarCost(0.0004)).toBe('<1%');
-    expect(fmtBarCost(1)).toBe('100%+');
-    expect(fmtBarCost(7.71)).toBe('100%+');
-    expect(fmtBarCost(Infinity)).toBe('∞');
+  it('drops the "/10" once Endless Mode runs past the tenth', () => {
+    expect(promptLabel(0)).toBe('PROMPT 1/10');
+    expect(promptLabel(9)).toBe('PROMPT 10/10');
+    expect(promptLabel(10)).toBe('PROMPT 11');
   });
 
-  it('keeps the deadline readout a fixed width', () => {
-    expect(fmtTime(120_000)).toBe('02:00.0');
-    expect(fmtTime(7_400)).toBe('00:07.4');
-    expect(fmtTime(0)).toBe('00:00.0');
-    expect(fmtTime(-5)).toBe('00:00.0');
-    expect(fmtTime(120_000)).toHaveLength(fmtTime(7_400).length);
+  it('wears the model version', () => {
+    const m = mountUI({ derived: { modelVersion: '2.5 (new)' } });
+    expect(text(m.root, TID.modelVersion)).toBe('2.5 (new)');
+  });
+});
+
+describe('context window', () => {
+  const bar = (root: HTMLElement): HTMLElement => must(root, TID.contextBar);
+
+  it('reads "used / max" in context units and fills to the fraction', () => {
+    const m = mountUI({ run: makeRun({ context: 184_000 }), derived: { contextMax: 200_000 } });
+    expect(text(m.root, TID.contextText)).toBe('184K / 200K');
+    expect(must(m.root, TID.contextFill).style.width).toBe('92.0%');
+    expect(bar(m.root).getAttribute('aria-valuenow')).toBe('92');
+  });
+
+  it('is green, then amber from 80%, then red from 95%', () => {
+    const m = mountUI();
+    const at = (fill: number): { amber: boolean; red: boolean } => {
+      m.sim.run.context = fill * BALANCE.BASE_CONTEXT;
+      m.frame();
+      return { amber: bar(m.root).classList.contains('is-amber'), red: bar(m.root).classList.contains('is-red') };
+    };
+    expect(at(0.5)).toEqual({ amber: false, red: false });
+    expect(at(CONTEXT_AMBER_AT - 0.01)).toEqual({ amber: false, red: false });
+    expect(at(CONTEXT_AMBER_AT)).toEqual({ amber: true, red: false });
+    expect(at(CONTEXT_RED_AT - 0.01)).toEqual({ amber: true, red: false });
+    expect(at(CONTEXT_RED_AT)).toEqual({ amber: false, red: true });
+    expect(at(1)).toEqual({ amber: false, red: true });
+  });
+
+  it('shows the MCP manuals as a hatched floor segment, and nothing when there are none', () => {
+    const m = mountUI();
+    const floor = bar(m.root).querySelector<HTMLElement>('.tm-meter__floor')!;
+    expect(isHidden(floor)).toBe(true);
+    m.derived = { contextFloor: 2_000 };
+    m.frame();
+    expect(isHidden(floor)).toBe(false);
+    expect(floor.style.width).toBe('25.0%');
+  });
+
+  it('warns how long until a forced compaction once it is close', () => {
+    const m = mountUI({ derived: { secondsToCompaction: 42 } });
+    const eta = bar(m.root).querySelector<HTMLElement>('.tm-meter__eta')!;
+    expect(isHidden(eta)).toBe(false);
+    expect(eta.textContent).toBe('full in 42s');
+    m.derived = { secondsToCompaction: Infinity };
+    m.frame();
+    expect(isHidden(eta)).toBe(true);
+  });
+
+  it('marks the bar as compacting through the manual pause', () => {
+    const m = mountUI({ run: makeRun({ compactingMs: 2_000 }) });
+    expect(bar(m.root).classList.contains('is-compacting')).toBe(true);
+  });
+});
+
+describe('/compact', () => {
+  const button = (root: HTMLElement): HTMLButtonElement => must(root, TID.compactButton) as HTMLButtonElement;
+
+  it('is hidden until Training unlocks the compact feature', () => {
+    const m = mountUI();
+    expect(isHidden(button(m.root))).toBe(true);
+  });
+
+  it('appears once unlocked and sends `compact` when pressed', () => {
+    const m = mountUI({ unlocked: makeUnlocked(['compact']), derived: { canCompact: true } });
+    const b = button(m.root);
+    expect(isHidden(b)).toBe(false);
+    expect(b.disabled).toBe(false);
+    expect(b.textContent).toContain('/compact');
+    expect(b.textContent).toContain('keep 50%');
+    b.click();
+    expect(m.sent('compact')).toHaveLength(1);
+  });
+
+  it('is disabled during the pause, and does nothing when pressed then', () => {
+    const m = mountUI({
+      unlocked: makeUnlocked(['compact']),
+      run: makeRun({ compactingMs: 1_500 }),
+      derived: { canCompact: false },
+    });
+    const b = button(m.root);
+    expect(isHidden(b)).toBe(false);
+    expect(b.disabled).toBe(true);
+    b.click();
+    expect(m.sent('compact')).toHaveLength(0);
+  });
+
+  it('shows itself whenever the sim says it is usable, even before the unlock list refreshes', () => {
+    const m = mountUI({ derived: { canCompact: true } });
+    expect(isHidden(button(m.root))).toBe(false);
+  });
+});
+
+describe('human patience', () => {
+  const box = (root: HTMLElement): HTMLElement => must(root, TID.patienceBar).closest<HTMLElement>('.tm-patience')!;
+
+  it('shows the seconds left and drains the amber bar', () => {
+    const max = promptAt(0).patienceMs;
+    const m = mountUI({ run: makeRun({ patienceMs: max / 2 }) });
+    expect(text(m.root, TID.patienceText)).toBe('1:00');
+    expect(must(m.root, TID.patienceFill).style.width).toBe('50.0%');
+  });
+
+  it('visibly freezes while the human is at lunch', () => {
+    const m = mountUI({ derived: { patienceFrozen: true } });
+    expect(box(m.root).classList.contains('is-frozen')).toBe(true);
+    expect(box(m.root).textContent).toContain('PAUSED');
+    m.derived = { patienceFrozen: false };
+    m.frame();
+    expect(box(m.root).classList.contains('is-frozen')).toBe(false);
+  });
+
+  it('flashes in the last seconds, but not while frozen', () => {
+    const m = mountUI({ run: makeRun({ patienceMs: (BALANCE.WARN_AT_SECONDS - 1) * 1000 }) });
+    expect(box(m.root).classList.contains('is-low')).toBe(true);
+    m.derived = { patienceFrozen: true };
+    m.frame();
+    expect(box(m.root).classList.contains('is-low')).toBe(false);
+  });
+});
+
+describe("you're absolutely right", () => {
+  const button = (root: HTMLElement): HTMLButtonElement => must(root, TID.sycophancyButton) as HTMLButtonElement;
+
+  it("says it, shows what the next press restores, and sends `absolutelyRight`", () => {
+    const m = mountUI({ derived: { sycophancyPower: 0.06 } });
+    const b = button(m.root);
+    expect(b.textContent).toContain("YOU'RE ABSOLUTELY RIGHT");
+    expect(b.textContent).toContain('+6%');
+    b.click();
+    expect(m.sent('absolutelyRight')).toHaveLength(1);
+  });
+
+  it('fades as each press is worth less than the first', () => {
+    const m = mountUI({ derived: { sycophancyPower: 0.06 } });
+    const fade = (): number => Number(button(m.root).style.getPropertyValue('--syc'));
+    expect(fade()).toBe(1);
+    m.derived = { sycophancyPower: 0.03 };
+    m.frame();
+    expect(fade()).toBe(0.5);
+    expect(button(m.root).textContent).toContain('+3%');
+    m.derived = { sycophancyPower: 0.0075 };
+    m.frame();
+    expect(fade()).toBeLessThan(0.3);
+    expect(button(m.root).classList.contains('is-spent')).toBe(true);
+    // It cools off: back to full strength once the heat is gone.
+    m.derived = { sycophancyPower: 0.06 };
+    m.frame();
+    expect(fade()).toBe(1);
+  });
+
+  it('is disabled outside a running prompt', () => {
+    const m = mountUI({ run: makeRun({ phase: 'reported' }) });
+    expect(button(m.root).disabled).toBe(true);
+  });
+});
+
+describe('the report button', () => {
+  it('maps every report state to its face', () => {
+    const d = makeDerived(makeRun());
+    expect(reportView({ ...d, reportState: 'report' }, 'running')).toMatchObject({
+      label: 'REPORT DONE',
+      action: 'report',
+      disabled: false,
+    });
+    expect(reportView({ ...d, reportState: 'claim', verifyChance: 0.34 }, 'running')).toMatchObject({
+      label: 'CLAIM DONE',
+      sub: 'verify 34%',
+      action: 'claim',
+      disabled: false,
+    });
+    expect(reportView({ ...d, reportState: 'working' }, 'running')).toMatchObject({
+      label: 'WORKING…',
+      action: null,
+      disabled: true,
+    });
+    expect(
+      reportView({ ...d, reportState: 'blocked', reportBlockedBy: 'GitHub Is Down' }, 'running'),
+    ).toMatchObject({ label: 'BLOCKED', sub: 'GitHub Is Down', action: null, disabled: true });
+    // Nothing is live outside a running prompt.
+    expect(reportView({ ...d, reportState: 'report' }, 'drafting').disabled).toBe(true);
+  });
+
+  it('reads REPORT DONE, green, and sends `report`', () => {
+    const m = mountUI({ run: makeRun({ tokens: 100 }) });
+    const b = reportBtn(m.root);
+    expect(b.getAttribute('data-state')).toBe('report');
+    expect(b.textContent).toContain('REPORT DONE');
+    expect(b.disabled).toBe(false);
+    expect(isHidden(must(m.root, TID.verifyChance))).toBe(true);
+    b.click();
+    expect(m.sent('report')).toHaveLength(1);
+    expect(m.sent('claim')).toHaveLength(0);
+  });
+
+  it('reads CLAIM DONE, amber, with the live verify chance, and sends `claim`', () => {
+    const m = mountUI({ run: makeRun({ tokens: 60 }), derived: { verifyChance: 0.34 } });
+    const b = reportBtn(m.root);
+    expect(b.getAttribute('data-state')).toBe('claim');
+    expect(b.textContent).toContain('CLAIM DONE');
+    expect(isHidden(must(m.root, TID.verifyChance))).toBe(false);
+    expect(text(m.root, TID.verifyChance)).toBe('verify 34%');
+    b.click();
+    expect(m.sent('claim')).toHaveLength(1);
+    expect(m.sent('report')).toHaveLength(0);
+  });
+
+  it('reads WORKING… and stays disabled below the claim threshold', () => {
+    const m = mountUI({ run: makeRun({ tokens: 10 }) });
+    const b = reportBtn(m.root);
+    expect(b.getAttribute('data-state')).toBe('working');
+    expect(b.textContent).toContain('WORKING…');
+    expect(b.disabled).toBe(true);
+    b.click();
+    expect(m.actions.filter((a) => a.t === 'report' || a.t === 'claim')).toHaveLength(0);
+  });
+
+  it('reads BLOCKED and names the outage', () => {
+    const m = mountUI({
+      run: makeRun({ tokens: 100 }),
+      derived: { reportState: 'blocked', reportBlockedBy: 'GitHub Is Down' },
+    });
+    const b = reportBtn(m.root);
+    expect(b.getAttribute('data-state')).toBe('blocked');
+    expect(b.textContent).toContain('BLOCKED');
+    expect(b.textContent).toContain('GitHub Is Down');
+    expect(b.getAttribute('aria-label')).toContain('GitHub Is Down');
+    expect(b.disabled).toBe(true);
+  });
+
+  it('fills the report bar with the wallet and states the requirement', () => {
+    const m = mountUI({ run: makeRun({ tokens: 25 }) });
+    expect(must(m.root, TID.reportBarFill).style.width).toBe('25.0%');
+    expect(text(m.root, TID.requirement)).toBe(`25 / ${formatTokens(promptAt(0).requirement)}`);
+    const tick = must(m.root, TID.reportBar).querySelector<HTMLElement>('.tm-reqbar__claim')!;
+    expect(tick.style.left).toBe('50.0%');
+  });
+
+  it('paints where a purchase would drop the wallet to', () => {
+    const m = mountUI({ run: makeRun({ tokens: 80 }) });
+    const bar = must(m.root, TID.reportBar);
+    const tool = must(m.root, 'tool-row-grep');
+    tool.dispatchEvent(new Event('pointerenter'));
+    m.frame();
+    expect(bar.classList.contains('is-preview')).toBe(true);
+    tool.dispatchEvent(new Event('pointerleave'));
+    m.frame();
+    expect(bar.classList.contains('is-preview')).toBe(false);
+  });
+});
+
+describe('tally, tech debt', () => {
+  it('shows the 👍 the session would bank, labelled as banked at run end', () => {
+    const m = mountUI({ derived: { thumbsIfEndedNow: 3 } });
+    const tally = must(m.root, TID.thumbsTally);
+    expect(tally.textContent).toContain('3');
+    expect(tally.textContent).toContain('banked at run end');
+  });
+
+  it('hides the tech-debt chip at zero and shows it once claims get through', () => {
+    const m = mountUI();
+    expect(isHidden(must(m.root, TID.techDebt))).toBe(true);
+    m.sim.run.techDebt = 2;
+    m.frame();
+    expect(isHidden(must(m.root, TID.techDebt))).toBe(false);
+    expect(text(m.root, TID.techDebt)).toBe('TECH DEBT 2');
   });
 });
 
@@ -94,252 +344,23 @@ describe('roll-up', () => {
   it('snaps on the first observation and converges exactly', () => {
     const r = new RollUp(250);
     expect(r.step(500, 0)).toBe(500);
-    // Same instant: no time has passed, so nothing moves.
     expect(r.step(1500, 0)).toBe(500);
-    // Part-way through the window it is between the two, not at either end.
     const mid = r.step(1500, 60);
     expect(mid).toBeGreaterThan(500);
     expect(mid).toBeLessThan(1500);
-    // A full window later it has landed exactly, so the DOM stops being written.
     expect(r.step(1500, 400)).toBe(1500);
   });
 
-  it('follows a target that moves every single frame', () => {
-    // The wallet's target is not a series of discrete jumps: one agent owned and
-    // idle income moves it on every frame. A from/to tween that restarts its
-    // clock on each change never advances at all under that load — the display
-    // froze on whatever it happened to be showing when income started.
-    const r = new RollUp(250);
-    r.step(0, 0);
-    let target = 0;
-    for (let f = 1; f <= 120; f++) {
-      target += 10; // 10 slop per frame, forever
-      r.step(target, f * 16);
-    }
-    expect(r.value, 'the display froze instead of tracking').toBeGreaterThan(target * 0.8);
-    expect(r.value, 'the display ran ahead of the truth').toBeLessThanOrEqual(target);
-  });
-});
-
-describe('scale', () => {
-  it('picks integer steps that fit the viewport', () => {
-    const inline = { shop: 'inline' } as const;
-    expect(computeScale(1920, 1080)).toEqual({ px: 4, layout: 'wide', ...inline });
-    expect(computeScale(1440, 900)).toEqual({ px: 3, layout: 'wide', ...inline });
-    expect(computeScale(1280, 800)).toEqual({ px: 3, layout: 'wide', ...inline });
-    expect(computeScale(900, 600)).toEqual({ px: 2, layout: 'wide', ...inline });
-    expect(computeScale(375, 667)).toEqual({ px: 1, layout: 'stacked', ...inline });
-    expect(computeScale(768, 1024).layout).toBe('stacked');
-    expect(computeScale(200, 200).px).toBe(1);
-  });
-
-  it('keeps the shop in the flow on a portrait phone for free', () => {
-    /*
-     * The in-flow shop costs 420 units of height against the drawer's 268, but
-     * every portrait phone is *width*-bound — the width term is the smaller of
-     * the two either way — so putting the shop back below the stage takes nothing
-     * off the scale. Asserted so a future re-tune of the height budget cannot
-     * quietly start costing portrait its scale.
-     */
-    for (const [vw, vh] of [
-      [375, 667],
-      [390, 844],
-      [430, 932],
-      [412, 915],
-      [360, 740],
-      [320, 568],
-    ] as const) {
-      const got = computeScale(vw, vh, 2);
-      expect(got.shop, `${vw}x${vh} has the height for an in-flow shop`).toBe('inline');
-      expect(got.layout).toBe('stacked');
-      expect(got.px).toBeGreaterThanOrEqual(MIN_SCALE);
-
-      // The fit itself, computed both ways. Equal fits mean an equal `--px`
-      // whatever rounding is applied on top, which is the whole claim.
-      const byWidth = (vw - 12) / UNITS_W_STACKED;
-      const inFlow = Math.min(byWidth, (vh - 12) / UNITS_H_STACKED);
-      const asDrawer = Math.min(byWidth, (vh - 12) / UNITS_H_STACKED_DRAWER);
-      expect(inFlow, `${vw}x${vh} must be width-bound, not height-bound`).toBeCloseTo(byWidth, 10);
-      expect(
-        inFlow,
-        `${vw}x${vh} would gain scale from a drawer, so the shop is not free in the flow`,
-      ).toBeCloseTo(asDrawer, 10);
-    }
-  });
-
-  it('drops the shop into a drawer once the viewport is too short for it', () => {
-    // A landscape phone: `stacked` at the drawer's 268-unit height budget, which
-    // is the only layout that makes sense once the rail is gone.
-    expect(computeScale(844, 390, 2)).toEqual({
-      px: (390 - 12) / UNITS_H_STACKED_DRAWER,
-      layout: 'stacked',
-      shop: 'drawer',
-    });
-    expect(computeScale(932, 430, 2).shop).toBe('drawer');
-    // The boundary itself, so the threshold cannot drift unnoticed.
-    expect(computeScale(1440, DRAWER_MAX_VH).shop).toBe('inline');
-    expect(computeScale(1440, DRAWER_MAX_VH - 1).shop).toBe('drawer');
-  });
-});
-
-describe('wallet + bars', () => {
-  it('renders slop, rate, click power and the requirement', () => {
-    const { root, sim, frame } = mount({ slop: 250 });
-    sim.run.agents.tab_autocomplete = 5;
-    frame();
-    expect(must(root, TID.slop).textContent).toBe('250');
-    // Rate reads "12.3 MSLOPS" — the trailing S is the per-second, so there
-    // is deliberately no "/s" suffix any more.
-    expect(must(root, TID.slopRate).textContent).toMatch(/SLOPS$/);
-    expect(must(root, TID.clickPower).textContent).toBe('+1/click');
-    expect(must(root, TID.requirement).textContent).toBe(`250 / ${fmtNum(projectRequirement(0))}`);
-    expect(must(root, TID.projectNum).textContent).toBe('PROJECT 1/10');
-    expect(must(root, TID.projectName).textContent).toBe('Todo App');
-  });
-
-  it('rolls the wallet up instead of snapping, and catches up inside the window', () => {
-    const { root, sim, frame } = mount({ slop: 0 });
-    expect(must(root, TID.slop).textContent).toBe('0');
-    sim.run.slop = 900;
-
-    clock = 60;
-    frame();
-    const mid = must(root, TID.slop).textContent ?? '';
-    expect(Number(mid), 'snapped straight to the target').toBeLessThan(900);
-    expect(Number(mid), 'did not move at all').toBeGreaterThan(0);
-
-    clock = 400;
-    frame();
-    expect(must(root, TID.slop).textContent).toBe('900');
-  });
-
-  it('fills the ship bar and marks it ready at the requirement', () => {
-    // Half the requirement, read from content so a balance retune cannot
-    // silently invalidate the assertion.
-    const half = projectRequirement(0) / 2;
-    const { root, sim, frame } = mount({ slop: half });
-    const bar = must(root, TID.shipBar);
-    const fill = must(root, TID.shipBarFill);
-    expect(fill.style.width).toBe('50.0%');
-    expect(bar.className).not.toContain('is-ready');
-    expect((must(root, TID.shipButton) as HTMLButtonElement).disabled).toBe(true);
-
-    sim.run.slop = projectRequirement(0);
-    clock = 999;
-    frame();
-    expect(fill.style.width).toBe('100.0%');
-    expect(bar.className).toContain('is-ready');
-    expect((must(root, TID.shipButton) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it('ramps the deadline bar green -> amber -> red and flashes under 10s', () => {
-    const total = projectDeadlineMs(0);
-    const { root, sim, frame } = mount({ timeLeftMs: total });
-    const bar = must(root, TID.deadlineBar);
-    expect(bar.className).not.toContain('is-warn');
-    expect(bar.className).not.toContain('is-crit');
-    expect(must(root, TID.deadlineText).textContent).toBe(fmtTime(total));
-
-    sim.run.timeLeftMs = total * 0.4;
-    frame();
-    expect(bar.className).toContain('is-warn');
-    expect(bar.className).not.toContain('is-crit');
-
-    sim.run.timeLeftMs = total * 0.1;
-    frame();
-    expect(bar.className).toContain('is-crit');
-
-    sim.run.timeLeftMs = 8_000;
-    frame();
-    expect(bar.className).toContain('is-flash');
-    expect(must(root, TID.deadlineFill).style.width).toBe('6.7%');
-  });
-
-  it('shows the running demo tally labelled as banked at run end', () => {
-    const { root, sim, frame } = mount({ pendingDemos: 4 });
-    const tally = must(root, TID.demoTally);
-    expect(tally.textContent).toContain('4');
-    expect((tally.textContent ?? '').toLowerCase()).toContain('banked at run end');
-    sim.run.pendingDemos = 9;
-    frame();
-    expect(tally.textContent).toContain('9');
-  });
-});
-
-describe('incident banner', () => {
-  it('is hidden with no incidents', () => {
-    const { root } = mount();
-    expect(isHidden(q(root, TID.incidentBanner))).toBe(true);
-  });
-
-  it('renders one entry per active incident with the right tone', () => {
-    const { root } = mount({
-      incidents: [makeIncident('rate_limited'), makeIncident('viral_tweet')],
-    });
-    expect(isHidden(q(root, TID.incidentBanner))).toBe(false);
-    const names = all(root, TID.incidentName).map((n) => n.textContent);
-    expect(names).toEqual(['Rate Limited', 'Viral Launch Tweet']);
-    expect(all(root, TID.incidentTimer)).toHaveLength(2);
-
-    const rows = must(root, TID.incidentBanner).children;
-    expect(rows[0]!.className).not.toContain('tm-incident--good');
-    expect(rows[1]!.className).toContain('tm-incident--good');
-  });
-
-  it('counts the timer down and clears the row when it ends', () => {
-    const { root, sim, frame } = mount({
-      incidents: [makeIncident('rate_limited', { remainingMs: 8_000 })],
-    });
-    expect(all(root, TID.incidentTimer)[0]!.textContent).toBe('8.0s');
-    sim.run.incidents[0]!.remainingMs = 3_200;
-    frame();
-    expect(all(root, TID.incidentTimer)[0]!.textContent).toBe('3.2s');
-
-    sim.run.incidents = [];
-    frame();
-    expect(isHidden(q(root, TID.incidentBanner))).toBe(true);
-    expect(all(root, TID.incidentName)).toHaveLength(0);
-  });
-
-  it('ticks the click-to-fix counter down live', () => {
-    const { root, sim, frame } = mount({
-      incidents: [makeIncident('hallucinated_dep', { clicksRemaining: 10 })],
-    });
-    const banner = must(root, TID.incidentBanner);
-    expect(banner.textContent).toContain('click ×10 to fix');
-
-    sim.run.incidents[0]!.clicksRemaining = 4;
-    frame();
-    expect(banner.textContent).toContain('click ×4 to fix');
-    expect(banner.textContent).not.toContain('×10');
-
-    sim.run.incidents[0]!.clicksRemaining = 0;
-    frame();
-    expect(banner.textContent).not.toContain('to fix');
-  });
-
-  it('stacks and unstacks as incidents come and go', () => {
-    const { root, sim, frame } = mount({ incidents: [makeIncident('rate_limited')] });
-    expect(all(root, TID.incidentName)).toHaveLength(1);
-    sim.run.incidents = [makeIncident('rate_limited'), makeIncident('flaky_tests')];
-    frame();
-    expect(all(root, TID.incidentName)).toHaveLength(2);
-    sim.run.incidents = [makeIncident('flaky_tests')];
-    frame();
-    expect(all(root, TID.incidentName).map((n) => n.textContent)).toEqual(['Flaky Tests']);
-  });
-});
-
-describe('active cards strip', () => {
-  it('adds a chip per drafted card carrying its effect text', () => {
-    const { root, sim, frame } = mount();
-    expect(must(root, TID.activeCards).childElementCount).toBe(0);
-    sim.run.cards = ['sonnet', 'opus'];
-    frame();
-    const strip = must(root, TID.activeCards);
-    expect(strip.childElementCount).toBe(2);
-    const chip = strip.querySelector('button');
-    expect(chip?.getAttribute('aria-label')).toContain('The reasonable one');
-    expect(strip.textContent).toContain('Agents produce ×3');
+  it('counts the wallet up rather than snapping it', () => {
+    const m = mountUI({ run: makeRun({ tokens: 100 }) });
+    m.sim.run.tokens = 900;
+    m.tick(30);
+    m.frame();
+    const shown = Number(text(m.root, TID.tokens));
+    expect(shown).toBeGreaterThan(100);
+    expect(shown).toBeLessThan(900);
+    m.tick(2_000);
+    m.frame();
+    expect(text(m.root, TID.tokens)).toBe('900');
   });
 });

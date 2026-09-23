@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SceneKey } from '@sim/types.ts';
 import { MockAudioContext, type MockGain } from '@audio/mock-context.ts';
-import { createMusic, SCENES, type MusicController } from '@audio/music.ts';
+import { createMusic, SCENES, tensionFor, type MusicController } from '@audio/music.ts';
 
 const SCENE_KEYS: readonly SceneKey[] = ['bedroom', 'coworking', 'openplan', 'datacenter', 'orbital'];
 
@@ -296,6 +296,82 @@ describe('setTension', () => {
       return s;
     };
     expect(pitches(1).size).toBeGreaterThan(pitches(0).size);
+  });
+});
+
+describe('tensionFor', () => {
+  const at = (patienceProgress: number, contextFill: number): number =>
+    tensionFor({ patienceProgress, contextFill });
+
+  it('is calm with a patient human and an empty window', () => {
+    expect(at(1, 0)).toBe(0);
+  });
+
+  it('rises linearly as patience runs out', () => {
+    expect(at(0.75, 0)).toBeCloseTo(0.25, 9);
+    expect(at(0.25, 0)).toBeCloseTo(0.75, 9);
+    expect(at(0, 0)).toBe(1);
+  });
+
+  it('rises with the square of context fill, so a half-full window stays calm', () => {
+    expect(at(1, 0.5)).toBeCloseTo(0.25, 9);
+    expect(at(1, 0.9)).toBeCloseTo(0.81, 9);
+    expect(at(1, 1)).toBe(1);
+  });
+
+  it('follows whichever clock is closer to ending the run', () => {
+    expect(at(0.5, 0.9)).toBeCloseTo(0.81, 9);
+    expect(at(0.1, 0.9)).toBeCloseTo(0.9, 9);
+    expect(at(0.3, 0.3)).toBeCloseTo(0.7, 9);
+  });
+
+  it('stays inside 0..1 for out-of-range readings', () => {
+    expect(at(-1, 0)).toBe(1);
+    expect(at(2, 0)).toBe(0);
+    expect(at(1, 3)).toBe(1);
+    expect(at(1, -2)).toBe(0);
+    for (const p of [-5, -0.5, 0, 0.4, 1, 7]) {
+      for (const c of [-3, 0, 0.6, 1, 9]) {
+        const t = at(p, c);
+        expect(t).toBeGreaterThanOrEqual(0);
+        expect(t).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('treats a non-finite reading as calm on its own axis only', () => {
+    expect(at(Number.NaN, 0.5)).toBeCloseTo(0.25, 9);
+    expect(at(0.2, Number.NaN)).toBeCloseTo(0.8, 9);
+    expect(at(Number.NaN, Number.NaN)).toBe(0);
+    expect(at(Number.POSITIVE_INFINITY, 0)).toBe(0);
+    expect(at(1, Number.POSITIVE_INFINITY)).toBe(1);
+  });
+
+  it('never goes down as either clock runs out', () => {
+    let prev = -1;
+    for (let p = 1; p >= 0; p -= 0.05) {
+      const t = at(p, 0.4);
+      expect(t).toBeGreaterThanOrEqual(prev);
+      prev = t;
+    }
+    prev = -1;
+    for (let c = 0; c <= 1; c += 0.05) {
+      const t = at(0.9, c);
+      expect(t).toBeGreaterThanOrEqual(prev);
+      prev = t;
+    }
+  });
+
+  it('drives the score: a nearly full window brings the hats in', () => {
+    const r = rig();
+    r.music.setTension(tensionFor({ patienceProgress: 1, contextFill: 0.97 }));
+    r.music.start();
+    r.run(1500);
+    const calm = rig();
+    calm.music.setTension(tensionFor({ patienceProgress: 1, contextFill: 0.2 }));
+    calm.music.start();
+    calm.run(1500);
+    expect(r.layers().hat.gain.value).toBeGreaterThan(calm.layers().hat.gain.value * 3);
   });
 });
 

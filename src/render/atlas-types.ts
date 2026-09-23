@@ -1,10 +1,16 @@
 /**
- * FROZEN CONTRACT — sprite atlas shape.
+ * The sprite atlas contract, and the agent's hit box.
  *
- * ART owns `src/render/atlas.ts`, which must default-export an `AtlasManifest`
- * satisfying this interface. RENDER imports only from this file plus the
- * manifest, so the two can be built in parallel.
+ * tools/art/build-art.mjs generates `src/render/atlas.ts`, which must
+ * default-export an `AtlasManifest` declaring every key in `REQUIRED_SPRITES`.
+ * The renderer imports only this file plus the manifest, and degrades to a
+ * procedural stand-in for any key the atlas lacks, so missing art never
+ * blanks the stage.
+ *
+ * Gadget and pickup keys are derived from content.ts, so adding a tool or a
+ * pickup shape to the content makes the art check fail until the art exists.
  */
+import { PICKUPS, TOOLS } from '../sim/content.ts';
 
 export interface SpriteFrame {
   /** Pixel rect inside the sheet. */
@@ -20,67 +26,105 @@ export interface SpriteFrame {
 export interface SpriteDef {
   /** Key into AtlasManifest.sheets. */
   readonly sheet: string;
-  /** One entry per animation frame; a static sprite has exactly one. */
+  /** One entry per animation frame (or per variant); a static sprite has exactly one. */
   readonly frames: readonly SpriteFrame[];
-  /** Frames per second for multi-frame sprites. */
+  /** Frames per second for animated sprites. */
   readonly fps?: number;
 }
 
 export interface AtlasManifest {
-  /** sheet key -> URL resolvable by the bundler (use `new URL(..., import.meta.url)`). */
+  /** sheet key -> URL resolvable by the bundler (`new URL(..., import.meta.url)`). */
   readonly sheets: Readonly<Record<string, string>>;
   readonly sprites: Readonly<Record<string, SpriteDef>>;
 }
 
-/**
- * Sprite keys the renderer expects. ART must provide every one of these.
- * RENDER must degrade gracefully (procedural fallback) if any is missing, so a
- * partial atlas never blanks the screen.
- */
-export const REQUIRED_SPRITES = [
-  // backdrops — full 320x180 scenes
-  'scene_bedroom',
-  'scene_coworking',
-  'scene_openplan',
-  'scene_datacenter',
-  'scene_orbital',
-  // the click target, 3 squash frames (rest / mid / squashed)
-  'laptop',
-  // desk clutter, one per agent tier, drawn as the tier is owned
-  'clutter_duck',
-  'clutter_mug',
-  'clutter_monitor',
-  'clutter_terminal',
-  'clutter_swarm',
-  'clutter_loop',
-  'clutter_rack',
-  'clutter_fleet',
-  'clutter_gpuwall',
-  'clutter_agi',
-  // the dev sprite at the desk, 2-frame idle typing loop
-  'dev_idle',
-  'dev_type',
+/** The human's room behind the glass, one per scene: game 1's art, dimmed. */
+export const ROOM_SPRITES = [
+  'room_bedroom',
+  'room_coworking',
+  'room_openplan',
+  'room_datacenter',
+  'room_orbital',
 ] as const;
 
-export type RequiredSprite = (typeof REQUIRED_SPRITES)[number];
+/**
+ * Human layers. All are authored in scene space: each frame carries its own
+ * `ox`/`oy`, so drawing at (0, 0) puts it where it belongs.
+ */
+export const HUMAN_SPRITES = [
+  'human_body',
+  // Per mood: [open, blink, looking down at the keyboard].
+  'human_eyes_tired',
+  'human_eyes_impatient',
+  'human_eyes_furious',
+  'human_eyes_suspicious',
+  'human_mug',
+  'human_typing',
+  'human_chair',
+] as const;
+
+/** Agent frames share one box; the feet sit at AGENT_FEET inside it. */
+export const AGENT_SPRITES = [
+  'agent_idle',
+  'agent_squash',
+  'agent_panic',
+  'agent_sweat',
+  'agent_dazed',
+  'agent_wait',
+  'agent_grovel',
+  'agent_mini',
+  'agent_team',
+] as const;
+
+/** Everything else on the stage. */
+export const PROP_SPRITES = [
+  // Pile blocks, 4 brightness levels each: lit, mid, dim, deep.
+  'token',
+  'token_small',
+  'token_tilt',
+  // The MCP manuals under the pile: 5 book variants.
+  'manual',
+  'wall_left',
+  'wall_right',
+  'scroll_summary',
+  'glass_glare',
+  'glass_crack',
+] as const;
+
+/** A tool's stage gadget, and its greyed-out twin for when it is halted. */
+export function gadgetSprites(gadget: string): readonly [string, string] {
+  return [gadget, `${gadget}_off`];
+}
+
+export const GADGET_SPRITES: readonly string[] = TOOLS.flatMap((t) => gadgetSprites(t.gadget));
+
+/** Pickup art is keyed by what it looks like, not by what it does. */
+export function pickupSprite(shape: string, accent: string): string {
+  return `pk_${shape}_${accent}`;
+}
+
+export const PICKUP_SPRITES: readonly string[] = [
+  ...new Set(PICKUPS.map((p) => pickupSprite(p.shape, p.accent))),
+];
+
+/** Every key the renderer draws from the atlas. ART must provide all of them. */
+export const REQUIRED_SPRITES: readonly string[] = [
+  ...ROOM_SPRITES,
+  ...HUMAN_SPRITES,
+  ...AGENT_SPRITES,
+  ...PROP_SPRITES,
+  ...GADGET_SPRITES,
+  ...PICKUP_SPRITES,
+];
+
+/** Size of every full-size agent frame, and where its feet land inside it. */
+export const AGENT_BOX = { w: 36, h: 50 } as const;
+export const AGENT_FEET = { x: 18, y: 45 } as const;
 
 /**
- * Where each clutter sprite sits in the 320x180 scene. Owned by RENDER for
- * layout purposes but declared here so ART can size sprites to fit.
- * Values are top-left anchors.
+ * The agent's hit box in 320x180 scene space: the click target. Deliberately
+ * generous (the whole character, its halo and a margin), because a missed
+ * click on a clicker game feels like a bug. The DOM overlay
+ * `data-testid="agent-hit"` is positioned over exactly this rect.
  */
-export const CLUTTER_SLOTS: Readonly<Record<string, { x: number; y: number; maxW: number; maxH: number }>> = {
-  clutter_duck: { x: 118, y: 104, maxW: 12, maxH: 12 },
-  clutter_mug: { x: 196, y: 104, maxW: 12, maxH: 12 },
-  clutter_monitor: { x: 226, y: 74, maxW: 40, maxH: 40 },
-  clutter_terminal: { x: 42, y: 74, maxW: 40, maxH: 40 },
-  clutter_swarm: { x: 12, y: 118, maxW: 48, maxH: 34 },
-  clutter_loop: { x: 262, y: 116, maxW: 44, maxH: 36 },
-  clutter_rack: { x: 274, y: 30, maxW: 40, maxH: 52 },
-  clutter_fleet: { x: 6, y: 26, maxW: 44, maxH: 52 },
-  clutter_gpuwall: { x: 84, y: 12, maxW: 152, maxH: 26 },
-  clutter_agi: { x: 140, y: 4, maxW: 40, maxH: 40 },
-};
-
-/** Laptop hit box in scene space. */
-export const LAPTOP_RECT = { x: 128, y: 96, w: 64, h: 44 } as const;
+export const AGENT_RECT = { x: 134, y: 106, w: 52, h: 60 } as const;

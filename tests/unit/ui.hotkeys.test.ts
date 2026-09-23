@@ -1,190 +1,157 @@
 /**
- * Keyboard operation: hotkeys, focus rules and the scene activation path.
+ * Keyboard: Space generates, 1-9 buy tools, S reports or claims, Y is
+ * sycophancy, C compacts, Esc closes. Never while typing, never with a
+ * modifier, never while a dialog owns the keyboard.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { AGENT_TIERS } from '../../src/sim/content.ts';
-import { TID } from '../../src/testids.ts';
-import { createUI } from '../../src/ui/index.ts';
-import type { UI, UIAction, UIScreen } from '../../src/ui/types.ts';
-import type { RunState } from '../../src/sim/types.ts';
-import { key, makeDerived, makeFakeSim, makeRun, must, type FakeSim } from './ui.fake-sim.ts';
+import { TID, tid } from '../../src/testids.ts';
+import { HOTKEY_HINTS } from '../../src/ui/hotkeys.ts';
+import { key, makeRun, makeUnlocked, mountUI, must, unmountAll } from './ui.fake-sim.ts';
 
-let mounted: UI | null = null;
-let host: HTMLElement | null = null;
+afterEach(unmountAll);
 
-interface Mounted {
-  ui: UI;
-  root: HTMLElement;
-  sim: FakeSim;
-  actions: UIAction[];
-  frame: () => void;
-}
+const toasts = (root: HTMLElement): string[] =>
+  Array.from(root.querySelectorAll(`[data-testid="${TID.toast}"]`), (n) => n.textContent ?? '');
 
-function mount(over: Partial<RunState> = {}, screen: UIScreen = 'run'): Mounted {
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const sim = makeFakeSim({ run: makeRun({ slop: 1e9, ...over }) });
-  const actions: UIAction[] = [];
-  const ui = createUI({ root, sim, screen, now: () => 0, onAction: (a) => actions.push(a) });
-  mounted = ui;
-  host = root;
-  const frame = (): void => ui.update(sim.run, makeDerived(sim.run), sim.meta);
-  frame();
-  return { ui, root, sim, actions, frame };
-}
-
-afterEach(() => {
-  mounted?.destroy();
-  mounted = null;
-  host?.remove();
-  host = null;
-  document.body.replaceChildren();
-});
-
-describe('hotkeys', () => {
-  it('S ships', () => {
-    const { sim } = mount();
-    key(window, 's');
-    expect(sim.ship).toHaveBeenCalledTimes(1);
-    key(window, 'S');
-    expect(sim.ship).toHaveBeenCalledTimes(2);
+describe('Space generates', () => {
+  it('clicks the agent from anywhere on the run screen', () => {
+    const m = mountUI();
+    key(window, ' ');
+    expect(m.sent('canvasKey')).toHaveLength(1);
   });
 
-  it('digits buy the matching visible tier', () => {
-    const { sim } = mount();
-    key(window, '1');
-    expect(sim.buyAgent).toHaveBeenLastCalledWith(AGENT_TIERS[0]!.id, 1);
-    key(window, '3');
-    expect(sim.buyAgent).toHaveBeenLastCalledWith(AGENT_TIERS[2]!.id, 1);
-    // only three tiers are visible by default; the 4th slot is a no-op
-    sim.buyAgent.mockClear();
-    key(window, '4');
-    expect(sim.buyAgent).not.toHaveBeenCalled();
-  });
-
-  it('the buy-quantity toggle cycles on click and applies to the next purchase', () => {
-    // There is no `Q` hotkey any more — the toggle is a button you press.
-    const { root, sim } = mount();
-    const toggle = must(root, TID.buyQtyToggle);
-    toggle.click();
-    expect(toggle.textContent).toBe('×10');
-    key(window, '1');
-    expect(sim.buyAgent).toHaveBeenLastCalledWith(AGENT_TIERS[0]!.id, 10);
-    toggle.click();
-    expect(toggle.textContent).toBe('MAX');
-    key(window, '1');
-    expect(sim.buyAgent).toHaveBeenLastCalledWith(AGENT_TIERS[0]!.id, Infinity);
-  });
-
-  it('does not fire while a text input has focus', () => {
-    const { sim } = mount();
-    const input = document.createElement('input');
-    input.type = 'text';
-    document.body.appendChild(input);
-    input.focus();
-
-    key(input, 's');
-    key(input, '1');
-    expect(sim.ship).not.toHaveBeenCalled();
-    expect(sim.buyAgent).not.toHaveBeenCalled();
-    input.remove();
-  });
-
-  it('does not fire while a range slider in options has focus', () => {
-    const { root, sim } = mount();
-    must(root, TID.optionsButton).click();
-    const slider = must(root, 'music-volume');
-    slider.focus();
-    key(slider, 's');
-    expect(sim.ship).not.toHaveBeenCalled();
-  });
-
-  it('ignores modified keystrokes', () => {
-    const { sim } = mount();
-    key(window, 's', { metaKey: true });
-    key(window, 's', { ctrlKey: true });
-    key(window, '1', { altKey: true });
-    expect(sim.ship).not.toHaveBeenCalled();
-    expect(sim.buyAgent).not.toHaveBeenCalled();
-  });
-
-  it('is inert outside the run screen', () => {
-    const { sim } = mount({}, 'title');
-    key(window, 's');
-    key(window, '1');
-    expect(sim.ship).not.toHaveBeenCalled();
-    expect(sim.buyAgent).not.toHaveBeenCalled();
-  });
-
-  it('is inert while a modal owns the keyboard', () => {
-    const { sim, frame } = mount({ phase: 'drafting', draftOffer: ['sonnet'] });
-    frame();
-    key(window, 's');
-    expect(sim.ship).not.toHaveBeenCalled();
-  });
-
-  it('ignores auto-repeat', () => {
-    const { sim } = mount();
-    key(window, 's', { repeat: true });
-    expect(sim.ship).not.toHaveBeenCalled();
-  });
-});
-
-describe('scene activation', () => {
-  it('Space on the focused scene reports a canvasKey action', () => {
-    const { root, actions } = mount();
-    const hit = must(root, TID.laptop);
-    hit.focus();
-    const e = key(hit, ' ');
+  it('does not also press whatever button has focus', () => {
+    const m = mountUI({ run: makeRun({ tokens: 1e9 }) });
+    const row = must(m.root, tid(TID.toolRow, 'grep'));
+    row.focus();
+    const e = key(row, ' ');
     expect(e.defaultPrevented).toBe(true);
-    expect(actions.filter((a) => a.t === 'canvasKey')).toHaveLength(1);
+    expect(m.sent('canvasKey')).toHaveLength(1);
   });
 
-  it('Enter works too', () => {
-    const { root, actions } = mount();
-    const hit = must(root, TID.laptop);
-    key(hit, 'Enter');
-    expect(actions.filter((a) => a.t === 'canvasKey')).toHaveLength(1);
+  it('does not autoclick when held', () => {
+    const m = mountUI();
+    key(window, ' ', { repeat: true });
+    expect(m.sent('canvasKey')).toHaveLength(0);
   });
 
-  it('pointerdown reports client coordinates for the host to convert', () => {
-    const { root, actions } = mount();
-    const hit = must(root, TID.laptop);
-    hit.dispatchEvent(
-      new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 42, clientY: 17 }),
-    );
-    const hits = actions.filter((a) => a.t === 'canvasPointer');
-    expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatchObject({ clientX: 42, clientY: 17 });
-  });
-
-  it('the scene hit area is a real button with an accessible name', () => {
-    const { root } = mount();
-    const hit = must(root, TID.laptop);
-    expect(hit.tagName).toBe('BUTTON');
-    expect(hit.getAttribute('aria-label')).toBeTruthy();
+  it('does nothing outside a running prompt', () => {
+    const m = mountUI({ run: makeRun({ phase: 'reported' }) });
+    key(window, ' ');
+    expect(m.sent('canvasKey')).toHaveLength(0);
   });
 });
 
-describe('ship button', () => {
-  it('is disabled until canShip and calls sim.ship when pressed', () => {
-    const root = document.createElement('div');
-    document.body.appendChild(root);
-    const sim = makeFakeSim({ run: makeRun({ slop: 0 }) });
-    const ui = createUI({ root, sim, screen: 'run', now: () => 0 });
-    mounted = ui;
-    host = root;
+describe('the letter keys', () => {
+  it('1-9 buy the Nth visible tool at the current quantity', () => {
+    const m = mountUI({ run: makeRun({ tokens: 1e12 }) });
+    key(window, '1');
+    key(window, '3');
+    must(m.root, TID.buyQtyToggle).click();
+    m.frame();
+    key(window, '2');
+    expect(m.sent('buyTool')).toEqual([
+      { t: 'buyTool', id: 'grep', count: 1 },
+      { t: 'buyTool', id: 'edit', count: 1 },
+      { t: 'buyTool', id: 'read', count: 10 },
+    ]);
+  });
 
-    ui.update(sim.run, makeDerived(sim.run), sim.meta);
-    const btn = must(root, TID.shipButton) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    btn.click();
-    expect(sim.ship).not.toHaveBeenCalled();
+  it('a digit past the list, or for a tool the wallet cannot cover, buys nothing', () => {
+    const m = mountUI({ run: makeRun({ tokens: 0 }) });
+    key(window, '9');
+    key(window, '1');
+    expect(m.sent('buyTool')).toHaveLength(0);
+    expect(toasts(m.root)).toContain('Not enough tokens');
+  });
 
-    sim.run.slop = 1e6;
-    ui.update(sim.run, makeDerived(sim.run), sim.meta);
-    expect(btn.disabled).toBe(false);
-    btn.click();
-    expect(sim.ship).toHaveBeenCalledTimes(1);
+  it('S reports when the button says REPORT DONE and claims when it says CLAIM DONE', () => {
+    const m = mountUI({ run: makeRun({ tokens: 100 }) });
+    key(window, 's');
+    expect(m.sent('report')).toHaveLength(1);
+    m.sim.run.tokens = 60;
+    m.frame();
+    key(window, 'S');
+    expect(m.sent('claim')).toHaveLength(1);
+    expect(m.sent('report')).toHaveLength(1);
+  });
+
+  it('S explains itself while there is nothing to report', () => {
+    const m = mountUI({ run: makeRun({ tokens: 0 }) });
+    key(window, 's');
+    expect(m.actions.filter((a) => a.t === 'report' || a.t === 'claim')).toHaveLength(0);
+    expect(toasts(m.root).join()).toContain('claim unlocks at 50%');
+    m.sim.run.tokens = 100;
+    m.derived = { reportState: 'blocked', reportBlockedBy: 'Merge Conflict' };
+    m.frame();
+    key(window, 's');
+    expect(toasts(m.root).join()).toContain('Blocked: Merge Conflict');
+  });
+
+  it("Y says you're absolutely right", () => {
+    const m = mountUI();
+    key(window, 'y');
+    expect(m.sent('absolutelyRight')).toHaveLength(1);
+  });
+
+  it('C compacts only once /compact is usable', () => {
+    const m = mountUI();
+    key(window, 'c');
+    expect(m.sent('compact')).toHaveLength(0);
+    m.sim.setUnlocked(makeUnlocked(['compact']));
+    m.derived = { canCompact: true };
+    m.frame();
+    key(window, 'c');
+    expect(m.sent('compact')).toHaveLength(1);
+    // Mid-pause: nothing.
+    m.sim.run.compactingMs = 1_000;
+    m.frame();
+    key(window, 'c');
+    expect(m.sent('compact')).toHaveLength(1);
+  });
+});
+
+describe('when the keys stand down', () => {
+  it('ignores modifiers, key repeats and text fields', () => {
+    const m = mountUI({ run: makeRun({ tokens: 100 }) });
+    key(window, 's', { ctrlKey: true });
+    key(window, 's', { metaKey: true });
+    key(window, 'y', { repeat: true });
+    const input = document.createElement('input');
+    m.root.appendChild(input);
+    key(input, 's');
+    key(input, ' ');
+    expect(m.actions.filter((a) => ['report', 'absolutelyRight', 'canvasKey'].includes(a.t))).toHaveLength(0);
+  });
+
+  it('is silent off the run screen', () => {
+    const m = mountUI({ screen: 'title', run: makeRun({ tokens: 100 }) });
+    key(window, 's');
+    key(window, ' ');
+    key(window, '1');
+    expect(m.actions.filter((a) => ['report', 'canvasKey', 'buyTool'].includes(a.t))).toHaveLength(0);
+  });
+
+  it('is silent while a dialog is up', () => {
+    const m = mountUI({ run: makeRun({ tokens: 100 }) });
+    (must(m.root, TID.optionsButton) as HTMLButtonElement).click();
+    key(window, 's');
+    key(window, ' ');
+    expect(m.actions.filter((a) => ['report', 'canvasKey'].includes(a.t))).toHaveLength(0);
+  });
+
+  it('Escape closes the topmost dialog first, then leaves Training', () => {
+    const m = mountUI();
+    (must(m.root, TID.helpButton) as HTMLButtonElement).click();
+    expect(must(m.root, TID.helpModal).hidden).toBe(false);
+    key(document.activeElement ?? window, 'Escape');
+    expect(must(m.root, TID.helpModal).hidden).toBe(true);
+    m.ui.setScreen('meta');
+    key(window, 'Escape');
+    expect(m.ui.screen).toBe('title');
+  });
+
+  it('lists the run keys in the topbar legend', () => {
+    expect(HOTKEY_HINTS.map((h) => h.keys)).toEqual(['Space', '1-9', 'S', 'Y', 'C']);
   });
 });

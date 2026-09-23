@@ -1,12 +1,20 @@
 /**
- * MetaState persistence.
+ * MetaState persistence, signing and the tamper audit.
  *
- * Every entry point is total: a missing, throwing, corrupt, or hostile storage
- * implementation yields a fresh valid MetaState instead of an exception.
+ * Every entry point is total: a missing, throwing, corrupt or hostile storage
+ * yields a fresh valid MetaState instead of an exception.
  */
-import type { AchievementId, MetaState, MetaUpgradeId, SaveVerdict, Settings } from './types.ts';
-import { META_UPGRADES, META_BY_ID } from './content.ts';
-import { ACHIEVEMENT_BY_ID } from './achievements.ts';
+import type {
+  AchievementId,
+  LegacyImport,
+  MetaState,
+  MetaUpgradeId,
+  SaveVerdict,
+  Settings,
+} from './types.ts';
+import { ACHIEVEMENT_BY_ID, FINAL_PROMPT_INDEX, META_BY_ID, META_UPGRADES } from './content.ts';
+import { STAT } from './effects.ts';
+import { legacyGift } from './legacy.ts';
 
 export const SAVE_KEY = 'tokenmaxxing2.save.v1';
 export const SAVE_VERSION = 1;
@@ -32,29 +40,45 @@ export function defaultMeta(): MetaState {
   const levels: Record<MetaUpgradeId, number> = {};
   for (const def of META_UPGRADES) levels[def.id] = 0;
   return {
-    demos: 0,
+    thumbs: 0,
     levels,
-    bestProject: 0,
+    bestPrompt: 0,
     runs: 0,
     wins: 0,
-    totalDemosEarned: 0,
+    totalThumbsEarned: 0,
     version: SAVE_VERSION,
     achievements: {},
+    stats: {},
+    legacy: null,
     settings: defaultSettings(),
   };
 }
 
+/** A fresh in-memory storage: handy for tests and for the legacy test hook. */
+export function memoryStorage(seed: Readonly<Record<string, string>> = {}): StorageLike {
+  const map = new Map<string, string>(Object.entries(seed));
+  return {
+    getItem: (k) => map.get(k) ?? null,
+    setItem: (k, v) => void map.set(k, v),
+    removeItem: (k) => void map.delete(k),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Signing
+// ---------------------------------------------------------------------------
+
 /**
- * Field carrying the save's checksum, and a decoy that nothing reads.
+ * The checksum field, and a decoy that nothing reads.
  *
- * None of this is security — the algorithm and the salt are a few lines below
- * in a public repository, so anyone who looks can forge a save. That is the
- * point: defeating the checksum is a puzzle with its own achievement, and the
- * decoy catches the reader who never got that far.
+ * None of this is security: the algorithm and salt are below, in a public
+ * repository. Defeating the checksum is a puzzle with its own achievement, and
+ * the decoy catches the reader who never got that far. Same scheme as the first
+ * game, with a new salt.
  */
 const SIG_FIELD = 'sig';
 const HONEYPOT_FIELD = 'cheats_enabled';
-const SALT = 'you-are-absolutely-right';
+const SALT = 'make-no-mistakes';
 
 /** Stable JSON: object keys sorted, so a re-serialise cannot change the hash. */
 function canonical(v: unknown): string {
@@ -66,19 +90,21 @@ function canonical(v: unknown): string {
 }
 
 /**
- * The fields the signature covers. `settings` is deliberately excluded: volume
- * and reduced-motion are preferences, not progression, and someone poking at
- * those has not cheated at anything.
+ * What the signature covers. `settings` is deliberately excluded: volume and
+ * reduced motion are preferences, and poking at them is not cheating. `legacy`
+ * is covered, so un-importing a game 1 save to take the gift twice shows.
  */
 function signedPart(raw: Record<string, unknown>): unknown {
   return {
-    demos: raw['demos'] ?? 0,
+    thumbs: raw['thumbs'] ?? 0,
     levels: raw['levels'] ?? {},
-    bestProject: raw['bestProject'] ?? 0,
+    bestPrompt: raw['bestPrompt'] ?? 0,
     runs: raw['runs'] ?? 0,
     wins: raw['wins'] ?? 0,
-    totalDemosEarned: raw['totalDemosEarned'] ?? 0,
+    totalThumbsEarned: raw['totalThumbsEarned'] ?? 0,
     achievements: raw['achievements'] ?? {},
+    stats: raw['stats'] ?? {},
+    legacy: raw['legacy'] ?? null,
     version: raw['version'] ?? SAVE_VERSION,
   };
 }
@@ -97,20 +123,44 @@ export function signSave(raw: Record<string, unknown>): string {
   return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`;
 }
 
+const VERDICTS: readonly string[] = ['clean', 'legacy', 'edited', 'forged'];
+
+function legacyIsCoherent(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== 'object') return false;
+  const r = value as Record<string, unknown>;
+  if (r['verdict'] === 'none') return true;
+  if (typeof r['verdict'] !== 'string' || !VERDICTS.includes(r['verdict'])) return false;
+  const count = (k: string): number => (typeof r[k] === 'number' ? (r[k] as number) : Number.NaN);
+  const runs = count('runs');
+  const wins = count('wins');
+  const gift = count('gift');
+  for (const v of [runs, wins, gift]) {
+    if (!Number.isInteger(v) || v < 0) return false;
+  }
+  // A tampered game 1 save is a cheater's by definition.
+  const cheater = r['cheater'];
+  if (cheater !== undefined && typeof cheater !== 'boolean') return false;
+  if (cheater === false && (r['verdict'] === 'edited' || r['verdict'] === 'forged')) return false;
+  // The gift is a formula of the old save's wins, not a number you pick.
+  return gift === legacyGift(wins);
+}
+
 /**
  * Is this payload internally possible?
  *
  * Runs on the **raw** JSON, because `migrateMeta` clamps levels to `maxLevel`
- * and quietly repairs `totalDemosEarned` — by the time sanitising is done the
- * evidence is gone. Anything here is something a hand-edited save gets wrong
+ * and quietly repairs `totalThumbsEarned`: by the time sanitising is done the
+ * evidence is gone. Everything here is something a hand-edited save gets wrong
  * even after the checksum has been recomputed.
  */
 export function saveIsCoherent(raw: Record<string, unknown>): boolean {
   const n = (k: string): number => (typeof raw[k] === 'number' ? (raw[k] as number) : 0);
-  if (n('runs') < 0 || n('demos') < 0 || n('wins') < 0 || n('totalDemosEarned') < 0) return false;
+  for (const k of ['runs', 'thumbs', 'wins', 'totalThumbsEarned', 'bestPrompt']) {
+    if (n(k) < 0) return false;
+  }
   if (n('wins') > n('runs')) return false;
-  if (n('bestProject') > META_MAX_PROJECT) return false;
-  if (n('totalDemosEarned') < n('demos')) return false;
+  if (n('totalThumbsEarned') < n('thumbs')) return false;
 
   const levels = raw['levels'];
   if (levels !== undefined && (typeof levels !== 'object' || levels === null)) return false;
@@ -133,13 +183,18 @@ export function saveIsCoherent(raw: Record<string, unknown>): boolean {
     const def = META_BY_ID[id];
     if (!def || typeof value !== 'number' || value < 1) continue;
     for (const req of def.requires) {
-      const parent = META_BY_ID[req];
-      if (!parent) continue;
+      if (!META_BY_ID[req]) continue;
       if (((lv[req] as number) ?? 0) < 1) return false;
     }
   }
-  // Every Demo ever spent had to be earned first.
-  if (spent + n('demos') > n('totalDemosEarned')) return false;
+  // Every 👍 ever spent had to be earned first.
+  if (spent + n('thumbs') > n('totalThumbsEarned')) return false;
+
+  // Prompt ten is the last one unless Endless Mode is owned. (No "a win means
+  // bestPrompt 9" rule: `endRun(true)` is public API and may bank a win early,
+  // and a false accusation is worse than a missed one.)
+  const endless = typeof lv['endless_mode'] === 'number' && (lv['endless_mode'] as number) >= 1;
+  if (!endless && n('bestPrompt') > FINAL_PROMPT_INDEX) return false;
 
   const ach = raw['achievements'];
   if (ach !== undefined) {
@@ -148,18 +203,22 @@ export function saveIsCoherent(raw: Record<string, unknown>): boolean {
       if (!ACHIEVEMENT_BY_ID[id]) return false;
     }
   }
-  return true;
-}
 
-/** Highest plausible `bestProject`. Ten projects, stored 1-based here. */
-const META_MAX_PROJECT = 10;
+  const stats = raw['stats'];
+  if (stats !== undefined) {
+    if (typeof stats !== 'object' || stats === null || Array.isArray(stats)) return false;
+    for (const v of Object.values(stats as Record<string, unknown>)) {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return false;
+    }
+  }
+
+  return legacyIsCoherent(raw['legacy']);
+}
 
 /**
  * Classify a stored payload before it is sanitised.
  *
- * `legacy` is the important one: a save written before signing existed has no
- * `sig`, and treating that as tampering would accuse every existing player the
- * first time they loaded a new build.
+ * `legacy` is the important one: a save with no `sig` is never an accusation.
  */
 export function auditSave(raw: unknown): SaveVerdict {
   if (!raw || typeof raw !== 'object') return 'clean';
@@ -172,6 +231,10 @@ export function auditSave(raw: unknown): SaveVerdict {
   if (sig !== signSave(r)) return 'edited';
   return saveIsCoherent(r) ? 'clean' : 'forged';
 }
+
+// ---------------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------------
 
 /** Best-effort handle on the ambient localStorage; null when unavailable. */
 export function defaultStorage(): StorageLike | null {
@@ -214,9 +277,7 @@ function sanitizeSettings(raw: unknown): Settings {
 function sanitizeLevels(raw: unknown): Record<MetaUpgradeId, number> {
   const levels: Record<MetaUpgradeId, number> = {};
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  for (const def of META_UPGRADES) {
-    levels[def.id] = int(r[def.id], 0, 0, def.maxLevel);
-  }
+  for (const def of META_UPGRADES) levels[def.id] = int(r[def.id], 0, 0, def.maxLevel);
   return levels;
 }
 
@@ -224,7 +285,7 @@ function sanitizeAchievements(raw: unknown): Record<AchievementId, number> {
   const out: Record<AchievementId, number> = {};
   if (!raw || typeof raw !== 'object') return out;
   for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    // Drop ids the build no longer knows about rather than carrying them along.
+    // Drop ids this build does not know rather than carrying them along.
     if (!ACHIEVEMENT_BY_ID[id]) continue;
     const run = int(value, 0, 0);
     if (run > 0) out[id] = run;
@@ -232,37 +293,68 @@ function sanitizeAchievements(raw: unknown): Record<AchievementId, number> {
   return out;
 }
 
+function sanitizeStats(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[k] = v;
+  }
+  return out;
+}
+
 /**
- * Migration hook. Older payloads are upgraded field-by-field here; anything
- * unrecognised falls back to the default value rather than failing the load.
+ * The import record, with `cheater` always set. Records written before the
+ * field existed get it from the verdict and from the stats flag early saves
+ * used instead (`legacyStats`), so no save can lose it.
+ */
+function sanitizeLegacy(raw: unknown, legacyStats: Record<string, number>): MetaState['legacy'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const verdict = r['verdict'];
+  if (verdict === 'none') return { verdict: 'none' };
+  if (typeof verdict !== 'string' || !VERDICTS.includes(verdict)) return null;
+  const cheater =
+    typeof r['cheater'] === 'boolean'
+      ? r['cheater']
+      : verdict === 'edited' || verdict === 'forged' || (legacyStats[STAT.legacyCheater] ?? 0) > 0;
+  const found: LegacyImport = {
+    verdict: verdict as SaveVerdict,
+    runs: int(r['runs'], 0),
+    wins: int(r['wins'], 0),
+    gift: int(r['gift'], 0),
+    cheater,
+  };
+  return found;
+}
+
+/**
+ * Migration hook. Unrecognised fields fall back to defaults rather than
+ * failing the load; the version switch is the seam for future schema bumps.
  */
 export function migrateMeta(raw: unknown): MetaState {
   const base = defaultMeta();
   if (!raw || typeof raw !== 'object') return base;
   const r = raw as Record<string, unknown>;
 
-  // v0 (pre-versioned) payloads look the same minus `version`; nothing to do
-  // beyond sanitising, but the switch is the seam for future schema bumps.
-  const version = int(r['version'], 0, 0, 1_000_000);
-
+  const stats = sanitizeStats(r['stats']);
   const meta: MetaState = {
-    demos: int(r['demos'], base.demos),
+    thumbs: int(r['thumbs'], base.thumbs),
     levels: sanitizeLevels(r['levels']),
-    bestProject: int(r['bestProject'], base.bestProject),
+    bestPrompt: int(r['bestPrompt'], base.bestPrompt),
     runs: int(r['runs'], base.runs),
     wins: int(r['wins'], base.wins),
-    totalDemosEarned: int(r['totalDemosEarned'], base.totalDemosEarned),
+    totalThumbsEarned: int(r['totalThumbsEarned'], base.totalThumbsEarned),
     version: SAVE_VERSION,
     achievements: sanitizeAchievements(r['achievements']),
+    stats,
+    legacy: sanitizeLegacy(r['legacy'], stats),
     settings: sanitizeSettings(r['settings']),
   };
-
-  if (version > SAVE_VERSION) {
-    // Save from a newer build: keep what we understand, drop the rest.
-    meta.version = SAVE_VERSION;
-  }
-  // totalDemosEarned can never be smaller than the demos on hand.
-  if (meta.totalDemosEarned < meta.demos) meta.totalDemosEarned = meta.demos;
+  // The old stats flag now lives on the import record. Only drop it once it
+  // has been folded in; without a record, it stays where isLegacyCheater reads it.
+  if (meta.legacy && meta.legacy.verdict !== 'none') delete meta.stats[STAT.legacyCheater];
+  // Lifetime 👍 can never be smaller than the 👍 on hand.
+  if (meta.totalThumbsEarned < meta.thumbs) meta.totalThumbsEarned = meta.thumbs;
   return meta;
 }
 
@@ -278,9 +370,7 @@ export function loadMetaAudited(storage: StorageLike | null = defaultStorage()):
   } catch {
     return { meta: defaultMeta(), verdict: 'clean' };
   }
-  if (typeof text !== 'string' || text.length === 0) {
-    return { meta: defaultMeta(), verdict: 'clean' };
-  }
+  if (typeof text !== 'string' || text.length === 0) return { meta: defaultMeta(), verdict: 'clean' };
   try {
     const raw = JSON.parse(text) as unknown;
     // Audit before migrating: sanitising clamps the very fields that give a
@@ -297,15 +387,12 @@ export function loadMeta(storage: StorageLike | null = defaultStorage()): MetaSt
   return loadMetaAudited(storage).meta;
 }
 
-/** Persist. Returns false instead of throwing when storage rejects the write. */
-export function saveMeta(
-  meta: MetaState,
-  storage: StorageLike | null = defaultStorage(),
-): boolean {
+/** Persist, signed. Returns false instead of throwing when storage refuses. */
+export function saveMeta(meta: MetaState, storage: StorageLike | null = defaultStorage()): boolean {
   if (!storage) return false;
   try {
     const payload: Record<string, unknown> = { ...meta, version: SAVE_VERSION };
-    // Signed after the payload is final, so a migrated save is re-signed rather
+    // Signed once the payload is final, so a migrated save is re-signed rather
     // than left looking edited.
     payload[SIG_FIELD] = signSave(payload);
     payload[HONEYPOT_FIELD] = false;
@@ -327,7 +414,7 @@ export function clearMeta(storage: StorageLike | null = defaultStorage()): boole
   }
 }
 
-/** Demo cost of the next level of a meta upgrade; Infinity when maxed/unknown. */
+/** 👍 cost of the next level of a Training node; Infinity when maxed or unknown. */
 export function metaNextCost(meta: MetaState, id: MetaUpgradeId): number {
   const def = META_BY_ID[id];
   if (!def) return Number.POSITIVE_INFINITY;

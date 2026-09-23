@@ -440,6 +440,11 @@ export interface LegacyImport {
   readonly wins: number;
   /** 👍 granted by the one-time welcome gift. */
   readonly gift: number;
+  /**
+   * The old save was tampered with (edited/forged, or it carries game 1's
+   * cheating achievements). The human cheats too, so they verify you less.
+   */
+  readonly cheater?: boolean;
 }
 
 export interface MetaState {
@@ -506,6 +511,10 @@ export interface DerivedStats {
   nextCosts: Record<ToolId, number>;
   /** Units of each tool still purchasable before its cap. */
   headroom: Record<ToolId, number>;
+  /** Effective context per second added by ONE unit of each tool, all modifiers applied. */
+  toolFootprint: Record<ToolId, number>;
+  /** Aggregate tool cost multiplier, for exact bulk prices via `bulkToolCost`. */
+  toolCostMult: number;
   /** Requirement of the current prompt. */
   requirement: number;
   /** tokens / requirement, clamped to [0, 1]. */
@@ -600,8 +609,16 @@ export type GameEvent =
   | { readonly t: 'metaBuy'; readonly id: MetaUpgradeId; readonly level: number; readonly cost: number }
   | { readonly t: 'runStart'; readonly seed: number }
   | { readonly t: 'achievement'; readonly id: AchievementId }
+  /** A tool unit was destroyed (rm -rf). */
+  | { readonly t: 'toolLost'; readonly id: ToolId; readonly owned: number }
   /** The one-time game-1 import happened. */
-  | { readonly t: 'legacyImport'; readonly verdict: SaveVerdict; readonly gift: number }
+  | {
+      readonly t: 'legacyImport';
+      readonly verdict: SaveVerdict;
+      readonly gift: number;
+      /** The old save was tampered with; see LegacyImport.cheater. */
+      readonly cheater: boolean;
+    }
   /** `cost` is tokens, `thumbs` is the meta currency. */
   | { readonly t: 'denied'; readonly reason: 'cost' | 'thumbs' | 'locked' | 'phase' };
 

@@ -1,5 +1,5 @@
 /*
- * Ambient fake agent session — styles for `src/ui/cli-backdrop.ts`.
+ * The ambient agent session behind the title: styles for `src/ui/cli-backdrop.ts`.
  *
  * Owns exactly these names: .tm-cli-host, .tm-cli, .tm-cli__log, .tm-cli__line,
  * .tm-cli__line--*, .tm-cli__path, .tm-cli__tail, @keyframes tm-cli-caret.
@@ -54,12 +54,12 @@
   align-items: stretch;
   padding: calc(6 * var(--u, 3px)) calc(5 * var(--u, 3px));
   font-family: var(--font, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
-  font-size: var(--fs-xs, 10px);
-  line-height: 1.45;
+  font-size: var(--t1, 8px);
+  line-height: var(--lh, 12px);
   color: var(--fg2, #6b7482);
   white-space: pre;
   /* Legibility budget: this thing lives *behind* real copy. */
-  opacity: var(--tm-cli-opacity, 0.15);
+  opacity: var(--tm-cli-opacity, 0.2);
   /* Soften the top clip so lines do not pop in against a hard edge. */
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16%, #000 100%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 16%, #000 100%);
@@ -79,21 +79,21 @@
   inset: 0;
   background: radial-gradient(
     ellipse 62% 48% at 50% 44%,
-    var(--bg0, #14161a) 0%,
-    rgba(20, 22, 26, 0.94) 30%,
-    rgba(20, 22, 26, 0.6) 56%,
-    rgba(20, 22, 26, 0) 82%
+    var(--bg0, #14171c) 0%,
+    rgba(20, 23, 28, 0.94) 30%,
+    rgba(20, 23, 28, 0.6) 56%,
+    rgba(20, 23, 28, 0) 82%
   );
 }
 
 .tm-cli__line {
   /* Empty spacer lines still take a row. */
-  min-height: 1.45em;
+  min-height: var(--lh, 12px);
   overflow: hidden;
 }
 
 .tm-cli__line--prompt {
-  color: var(--green, #4ec94e);
+  color: var(--green, #4ade5a);
 }
 
 .tm-cli__line--tool {
@@ -107,19 +107,19 @@
 }
 
 .tm-cli__line--ok {
-  color: var(--green, #4ec94e);
+  color: var(--green, #4ade5a);
 }
 
 .tm-cli__line--warn {
-  color: var(--amber, #e8b34a);
+  color: var(--amber, #f2b33d);
 }
 
 .tm-cli__line--fail {
-  color: var(--red, #e5484d);
+  color: var(--red, #e0524a);
 }
 
 .tm-cli__path {
-  color: var(--blue, #4a9de8);
+  color: var(--blue, #4aa3f0);
 }
 
 .tm-cli__tail {
@@ -130,7 +130,7 @@
    animation loop never touches it. */
 .tm-cli__log > .tm-cli__line:last-child::after {
   content: "\258b";
-  color: var(--green, #4ec94e);
+  color: var(--green, #4ade5a);
   animation: tm-cli-caret 1.06s steps(1, end) infinite;
 }
 

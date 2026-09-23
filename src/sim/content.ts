@@ -52,6 +52,11 @@ export const BALANCE = {
   CTX_PER_CLICK: 24,
   /** Context added by one "You're absolutely right!". Sycophancy is tokens too. */
   CTX_PER_SYCOPHANCY: 300,
+  /**
+   * Ceiling on the permanent floor (MCP manuals) as a fraction of the window.
+   * Without it, enough MCP Servers in a small window compact every tick.
+   */
+  FLOOR_CAP_FRACTION: 0.5,
   /** Context left after any compaction, as a fraction of the window (plus the floor). */
   SUMMARY_FRACTION: 0.05,
   /** Wallet fraction kept by a forced / manual compaction. */
@@ -950,8 +955,10 @@ export const CARDS: readonly CardDef[] = [
     name: 'TAKE A DEEP BREATH',
     blurb: 'Measurably helps. Nobody knows why. You do not breathe.',
     rarity: 'common',
-    effects: [{ t: 'critChance', v: 0.03 }],
-    onPick: [{ t: 'patience', ofMax: 0.3 }],
+    effects: [
+      { t: 'critChance', v: 0.03 },
+      { t: 'patienceMult', v: 1.1 },
+    ],
   },
   {
     id: 'best_practices',

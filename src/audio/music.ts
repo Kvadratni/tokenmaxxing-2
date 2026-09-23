@@ -17,12 +17,13 @@
  *
  * `setTension()` is smoothed every tick rather than applied stepwise: tempo
  * lifts modestly, the hat layer fades in, and a minor-2nd shadow voice appears
- * at the tail of each bar as t -> 1.
+ * at the tail of each bar as t -> 1. `tensionFor()` turns a frame of the run
+ * (patience left, context used) into that 0..1 amount.
  */
 
-import type { SceneKey } from '../sim/types.ts';
+import type { DerivedStats, SceneKey } from '../sim/types.ts';
 import { rampParam } from './context.ts';
-import { clamp, mtof, playTone, VoicePool, type Wave } from './synth.ts';
+import { clamp, mtof, playTone, saturate, VoicePool, type Wave } from './synth.ts';
 
 /** Scheduler wakeups. */
 const LOOKAHEAD_MS = 25;
@@ -180,6 +181,20 @@ export const SCENES: Readonly<Record<SceneKey, SceneCfg>> = {
     swing: 0,
   },
 };
+
+/**
+ * The score's tension for one frame of a run: whichever of the two clocks is
+ * closer to ending it. Patience counts linearly. Context counts as its square,
+ * so a half-full window stays calm (0.25) and only a nearly full one
+ * (0.9 -> 0.81) competes with a human who is about to switch models.
+ *
+ * Pure. A non-finite reading counts as calm on its own axis.
+ */
+export function tensionFor(d: Pick<DerivedStats, 'patienceProgress' | 'contextFill'>): number {
+  const impatience = saturate(1 - d.patienceProgress);
+  const fill = saturate(d.contextFill);
+  return saturate(Math.max(impatience, fill * fill));
+}
 
 export interface MusicController {
   /** Begin (or resume) the scheduler. No-op while suspended or disabled. */
@@ -366,7 +381,7 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode): MusicControl
       }
     }
 
-    // Low rumble under the bar line when the deadline is nearly up.
+    // Low rumble under the bar line when a clock has nearly run out.
     if (dis > 0.5 && step === 0) {
       playTone(ctx, bassGain, {
         wave: 'saw',

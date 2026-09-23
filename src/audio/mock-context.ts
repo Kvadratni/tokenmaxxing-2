@@ -1,7 +1,7 @@
 /**
  * A minimal, inspectable stand-in for WebAudio.
  *
- * happy-dom (and Node) ship no WebAudio at all, so the unit tests inject this
+ * happy-dom (and Node) have no WebAudio at all, so the unit tests inject this
  * instead. Every node records the calls made against it, and every `AudioParam`
  * eagerly folds ramp targets into `.value` so assertions can read the settled
  * gain without simulating the audio clock.

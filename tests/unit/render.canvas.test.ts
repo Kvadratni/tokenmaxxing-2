@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MAX_DPR, computeScale } from '../../src/render/canvas.ts';
 import { createRenderer } from '../../src/render/index.ts';
-import { LAPTOP_RECT } from '../../src/render/atlas-types.ts';
+import { AGENT_RECT } from '../../src/render/atlas-types.ts';
 import { SCENE_HEIGHT, SCENE_WIDTH } from '../../src/sim/types.ts';
 import { makeCanvas } from './render.mock-ctx.ts';
 
@@ -105,12 +105,12 @@ describe('resize applies the computed geometry to the element', () => {
   });
 });
 
-describe('toScene / hitsLaptop', () => {
-  const cx = LAPTOP_RECT.x + LAPTOP_RECT.w / 2;
-  const cy = LAPTOP_RECT.y + LAPTOP_RECT.h / 2;
+describe('toScene / hitsAgent', () => {
+  const cx = AGENT_RECT.x + AGENT_RECT.w / 2;
+  const cy = AGENT_RECT.y + AGENT_RECT.h / 2;
 
   for (const scale of [1, 2, 3, 4, 6]) {
-    it(`round-trips the laptop centre at scale ${scale}`, () => {
+    it(`round-trips the agent's centre at scale ${scale}`, () => {
       const { canvas } = makeCanvas({ left: 37, top: 11 });
       const r = createRenderer(canvas, {
         measure: () => ({ w: SCENE_WIDTH * scale, h: SCENE_HEIGHT * scale }),
@@ -121,7 +121,7 @@ describe('toScene / hitsLaptop', () => {
       const p = r.toScene(37 + cx * scale, 11 + cy * scale);
       expect(p.x).toBeCloseTo(cx, 6);
       expect(p.y).toBeCloseTo(cy, 6);
-      expect(r.hitsLaptop(p.x, p.y)).toBe(true);
+      expect(r.hitsAgent(p.x, p.y)).toBe(true);
       r.destroy();
     });
   }
@@ -129,18 +129,18 @@ describe('toScene / hitsLaptop', () => {
   it('misses just outside every edge of the rect', () => {
     const { canvas } = makeCanvas();
     const r = createRenderer(canvas, { measure: () => ({ w: 1280, h: 720 }), dpr: () => 1, sheetTimeoutMs: 5, });
-    const { x, y, w, h } = LAPTOP_RECT;
+    const { x, y, w, h } = AGENT_RECT;
 
-    expect(r.hitsLaptop(x, y)).toBe(true);
-    expect(r.hitsLaptop(x + w - 0.01, y + h - 0.01)).toBe(true);
+    expect(r.hitsAgent(x, y)).toBe(true);
+    expect(r.hitsAgent(x + w - 0.01, y + h - 0.01)).toBe(true);
 
-    expect(r.hitsLaptop(x - 0.5, cy)).toBe(false);
-    expect(r.hitsLaptop(x + w, cy)).toBe(false);
-    expect(r.hitsLaptop(x + w + 0.5, cy)).toBe(false);
-    expect(r.hitsLaptop(cx, y - 0.5)).toBe(false);
-    expect(r.hitsLaptop(cx, y + h)).toBe(false);
-    expect(r.hitsLaptop(-1000, -1000)).toBe(false);
-    expect(r.hitsLaptop(Number.NaN, Number.NaN)).toBe(false);
+    expect(r.hitsAgent(x - 0.5, cy)).toBe(false);
+    expect(r.hitsAgent(x + w, cy)).toBe(false);
+    expect(r.hitsAgent(x + w + 0.5, cy)).toBe(false);
+    expect(r.hitsAgent(cx, y - 0.5)).toBe(false);
+    expect(r.hitsAgent(cx, y + h)).toBe(false);
+    expect(r.hitsAgent(-1000, -1000)).toBe(false);
+    expect(r.hitsAgent(Number.NaN, Number.NaN)).toBe(false);
     r.destroy();
   });
 
