@@ -31,7 +31,74 @@ export interface CoachTip {
    * in the DOM wins; if none is present the bubble degrades to a fixed corner.
    */
   readonly anchors: readonly string[];
+  /** Which side of the anchor to try first. Default below. */
+  readonly placement?: 'above' | 'below';
   readonly when: (run: RunState, d: DerivedStats) => boolean;
+}
+
+/** A viewport rectangle, the shape `getBoundingClientRect()` returns. */
+export interface TipRect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface TipPlacement {
+  readonly left: number;
+  readonly top: number;
+  /** Where the bubble ended up relative to its anchor (it points back at it). */
+  readonly side: 'above' | 'below' | 'right' | 'left';
+}
+
+/** Scene pixels along the bottom of the stage where the canvas prints the prompt. */
+export const STAGE_CAPTION_BAND = 22;
+
+function overlaps(a: TipRect, left: number, top: number, w: number, h: number): boolean {
+  return left < a.right && left + w > a.left && top < a.bottom && top + h > a.top;
+}
+
+/**
+ * Where a `w` x `h` bubble goes next to `anchor`. The preferred side first,
+ * then the others; a spot that leaves the viewport, or lands on `keepOut`
+ * (the prompt line along the bottom of the stage), is passed over. Pure, so
+ * it can be tested without a layout engine.
+ */
+export function placeTip(
+  anchor: TipRect,
+  w: number,
+  h: number,
+  vw: number,
+  vh: number,
+  prefer: 'above' | 'below' = 'below',
+  keepOut: TipRect | null = null,
+  gap = 10,
+): TipPlacement {
+  const clampX = (x: number): number => Math.max(gap, Math.min(vw - w - gap, x));
+  const clampY = (y: number): number => Math.max(gap, Math.min(vh - h - gap, y));
+  const cx = clampX(anchor.left + anchor.width / 2 - w / 2);
+  const cy = clampY(anchor.top + anchor.height / 2 - h / 2);
+  const spots: Record<TipPlacement['side'], { left: number; top: number; fits: boolean }> = {
+    above: { left: cx, top: anchor.top - h - gap, fits: anchor.top - h - gap >= gap },
+    below: { left: cx, top: anchor.bottom + gap, fits: anchor.bottom + gap + h <= vh - gap },
+    right: { left: anchor.right + gap, top: cy, fits: anchor.right + gap + w <= vw - gap },
+    left: { left: anchor.left - w - gap, top: cy, fits: anchor.left - w - gap >= gap },
+  };
+  const order: TipPlacement['side'][] =
+    prefer === 'above' ? ['above', 'right', 'left', 'below'] : ['below', 'above', 'right', 'left'];
+  for (const side of order) {
+    const s = spots[side];
+    if (s.fits && (keepOut === null || !overlaps(keepOut, s.left, s.top, w, h))) {
+      return { left: Math.round(s.left), top: Math.round(s.top), side };
+    }
+  }
+  // Nothing fits cleanly: the preferred side, clamped, and lifted off the band.
+  const first = spots[order[0]!];
+  let top = clampY(first.top);
+  if (keepOut !== null && overlaps(keepOut, first.left, top, w, h)) top = Math.max(gap, keepOut.top - h - gap);
+  return { left: Math.round(first.left), top: Math.round(top), side: order[0]! };
 }
 
 const firstTool = TOOLS[0];
@@ -45,6 +112,8 @@ export const COACH_TIPS: readonly CoachTip[] = [
     id: 'generate',
     text: 'Click the agent, or press Space, to generate tokens.',
     anchors: [TID.agent, TID.scene],
+    // Over the agent, pointing down: below it is the prompt the human typed.
+    placement: 'above',
     when: (run) => run.phase === 'running',
   },
   {
@@ -203,7 +272,10 @@ class CoachMarks implements Coach {
     this.place(live, tip);
   }
 
-  /** Pin the bubble under its anchor, or park it in the corner when it cannot be measured. */
+  /**
+   * Pin the bubble beside its anchor (see `placeTip`), or park it in the
+   * corner when nothing can be measured.
+   */
   private place(live: Live, tip: CoachTip): void {
     const node = live.node;
     const anchor = this.findAnchor(tip.anchors);
@@ -220,11 +292,22 @@ class CoachMarks implements Coach {
     const { vw, vh } = layoutViewport();
     const w = node.offsetWidth || 0;
     const h = node.offsetHeight || 0;
-    const left = Math.max(GAP, Math.min(vw - w - GAP, rect.left + rect.width / 2 - w / 2));
-    const below = rect.bottom + GAP;
-    const top = below + h > vh - GAP ? Math.max(GAP, rect.top - h - GAP) : below;
-    node.style.setProperty('left', `${Math.round(left)}px`);
-    node.style.setProperty('top', `${Math.round(top)}px`);
+    const p = placeTip(rect, w, h, vw, vh, tip.placement ?? 'below', this.captionBand(), GAP);
+    node.style.setProperty('left', `${p.left}px`);
+    node.style.setProperty('top', `${p.top}px`);
+    node.dataset['side'] = p.side;
+    // The pointer aims at the anchor even when the bubble is clamped off-centre.
+    const aim = rect.left + rect.width / 2 - p.left;
+    node.style.setProperty('--aim', `${Math.round(Math.max(12, Math.min(w - 12, aim)))}px`);
+  }
+
+  /** The strip along the bottom of the stage where the canvas prints the prompt. */
+  private captionBand(): TipRect | null {
+    const stage = this.el.parentElement?.querySelector<HTMLElement>('.tm-stage');
+    const r = stage?.getBoundingClientRect();
+    if (!r || r.width === 0) return null;
+    const band = STAGE_CAPTION_BAND * (r.width / 320);
+    return { left: r.left, right: r.right, top: r.bottom - band, bottom: r.bottom, width: r.width, height: band };
   }
 
   /** Scoped to the coach's own parent first, then the document. */

@@ -117,9 +117,13 @@ describe('caption', () => {
   const caption = (root: HTMLElement): string =>
     root.querySelector('.tm-stage__caption')?.textContent ?? '';
 
-  it("shows the human's prompt, typed at a terminal", () => {
+  it("reads the human's prompt to screen readers, and leaves the pixels to the canvas", () => {
     const m = mountUI({ run: makeRun({ promptIndex: 3 }) });
     expect(caption(m.root)).toBe(`> ${promptAt(3).text}`);
+    const node = m.root.querySelector<HTMLElement>('.tm-stage__caption')!;
+    expect(node.classList.contains('tm-sr-only')).toBe(true);
+    expect(node.getAttribute('aria-live')).toBe('polite');
+    expect(node.hasAttribute('aria-hidden')).toBe(false);
   });
 
   it('says what a compaction forgot, then goes back to the prompt', () => {

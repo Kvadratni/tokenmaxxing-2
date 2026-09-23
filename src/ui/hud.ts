@@ -35,9 +35,15 @@ export const CONTEXT_RED_AT = 0.95;
 /** Only hint "full in 42s" when the overflow is this close. */
 const COMPACTION_HINT_S = 90;
 
+/**
+ * The button's face: the sim's `ReportState` while the prompt is running, and
+ * `reported` in the beat after a report and through the draft.
+ */
+export type ReportFace = ReportState | 'reported';
+
 /** What the report button shows, as plain data. Exported for tests. */
 export interface ReportView {
-  readonly state: ReportState;
+  readonly state: ReportFace;
   readonly label: string;
   /** Second line under the label; '' when there is nothing to add. */
   readonly sub: string;
@@ -47,16 +53,40 @@ export interface ReportView {
   readonly aria: string;
 }
 
-/** The one button with four faces, straight from `derived.reportState`. */
+/**
+ * The one button with four faces, straight from `derived.reportState` while
+ * the prompt runs. Outside it (the beat after a report, the draft, a
+ * compaction, the run's end) `reportState` describes a prompt that is already
+ * finished, so the button goes neutral and S does nothing.
+ */
 export function reportView(d: DerivedStats, phase: RunPhase): ReportView {
-  const running = phase === 'running';
+  if (phase === 'reported' || phase === 'drafting') {
+    return {
+      state: 'reported',
+      label: 'REPORTED ✓',
+      sub: '',
+      disabled: true,
+      action: null,
+      aria: 'Reported: the human is prompt engineering',
+    };
+  }
+  if (phase !== 'running') {
+    return {
+      state: 'working',
+      label: 'WORKING…',
+      sub: '',
+      disabled: true,
+      action: null,
+      aria: phase === 'compacting' ? 'Working: compacting' : 'Working',
+    };
+  }
   switch (d.reportState) {
     case 'report':
       return {
         state: 'report',
         label: 'REPORT DONE',
         sub: '',
-        disabled: !running,
+        disabled: false,
         action: 'report',
         aria: 'Report done: the wallet covers the prompt',
       };
@@ -66,7 +96,7 @@ export function reportView(d: DerivedStats, phase: RunPhase): ReportView {
         state: 'claim',
         label: 'CLAIM DONE',
         sub: `verify ${v}`,
-        disabled: !running,
+        disabled: false,
         action: 'claim',
         aria: `Claim done: spends the whole wallet; ${v} chance the human checks`,
       };
@@ -512,8 +542,10 @@ export class Hud {
     const claimFace = view.state === 'claim';
     this.verifyHide.set(!claimFace);
     this.verify.set(claimFace ? view.sub : '');
-    this.reportSubHide.set(claimFace || view.sub === '');
-    this.reportSub.set(claimFace ? '' : view.sub);
+    // Exactly one second line is always showing (a blank one on REPORT DONE),
+    // so the button never changes height between faces.
+    this.reportSubHide.set(claimFace);
+    this.reportSub.set(claimFace ? '' : view.sub || '\u00a0');
 
     const p = d.reportProgress;
     this.reqFillW.set(barWidth(p));

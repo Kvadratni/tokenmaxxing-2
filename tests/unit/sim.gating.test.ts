@@ -150,8 +150,8 @@ describe('buyMeta', () => {
     expect(s.metaCost('tool_use')).toBe(META_BY_ID['tool_use']!.costs[0]);
     expect(s.buyMeta('tool_use')).toBe(true);
     expect(s.meta.levels['tool_use']).toBe(1);
-    expect(s.meta.thumbs).toBe(10 - 2);
-    expect(log.at(-1)).toEqual({ t: 'metaBuy', id: 'tool_use', level: 1, cost: 2 });
+    expect(s.meta.thumbs).toBe(10 - 1);
+    expect(log.at(-1)).toEqual({ t: 'metaBuy', id: 'tool_use', level: 1, cost: 1 });
     expect(JSON.parse(storage.getItem(SAVE_KEY) ?? '{}').levels.tool_use).toBe(1);
   });
 
@@ -168,7 +168,7 @@ describe('buyMeta', () => {
     s.meta.levels['harmless'] = 1;
     expect(s.buyMeta('honest')).toBe(false); // maxLevel 1
     expect(s.metaCost('honest')).toBe(Number.POSITIVE_INFINITY);
-    s.meta.thumbs = 1;
+    s.meta.thumbs = 0;
     expect(s.buyMeta('tool_use')).toBe(false);
     const reasons = log.filter((e) => e.t === 'denied').map((e) => (e.t === 'denied' ? e.reason : ''));
     expect(reasons).toEqual(['locked', 'locked', 'locked', 'thumbs']);

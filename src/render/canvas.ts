@@ -1,18 +1,24 @@
 /**
- * Canvas plumbing: integer-scale fitting, DPR handling and pointer -> scene
+ * Canvas plumbing: scale fitting, DPR handling and pointer -> scene
  * coordinate maths.
  *
- * The scene is always exactly SCENE_WIDTH x SCENE_HEIGHT logical pixels. The
- * canvas is backed at an *integer* multiple of that (times DPR) so every scene
- * pixel lands on a whole number of device pixels — that is the difference
- * between crisp pixel art and a shimmering mess.
+ * The scene is always exactly SCENE_WIDTH x SCENE_HEIGHT logical pixels. Below
+ * 2x DPR the canvas is an *integer* multiple of that, so every scene pixel
+ * lands on a whole number of device pixels: the difference between crisp
+ * pixel art and a shimmering mess. At 2x and up there are device pixels to
+ * spare, and the UI (src/ui/scale.ts) sizes the stage box at a fractional
+ * `--px`; the canvas then fills that box exactly, so the DOM hit box laid over
+ * the agent in `--px` units lands on the agent the canvas draws.
  */
 import { SCENE_HEIGHT, SCENE_WIDTH } from '../sim/types.ts';
 import { AGENT_RECT } from './atlas-types.ts';
 import { PALETTE } from './palette.ts';
 
 export interface ScaleResult {
-  /** Integer CSS-pixel multiplier. Always >= 1. */
+  /**
+   * CSS pixels per scene pixel. Always >= 1; a whole number below 2x DPR, the
+   * exact fit of the host box at 2x DPR and above.
+   */
   readonly scale: number;
   /** Device pixel ratio actually used (clamped, finite). */
   readonly dpr: number;
@@ -29,6 +35,12 @@ export interface ScaleResult {
 /** Largest DPR we will back a canvas at. Beyond this the memory cost dwarfs the gain. */
 export const MAX_DPR = 4;
 
+/** At and above this DPR the canvas takes the exact (fractional) fit. Matches src/ui/scale.ts. */
+export const FRACTIONAL_MIN_DPR = 2;
+
+/** Round a CSS length to 1/1000 px, so 320 * (864 / 320) is 864, not 863.9999. */
+const cssRound = (v: number): number => Math.round(v * 1000) / 1000;
+
 /** Pure, testable core of the fitting maths. */
 export function computeScale(availW: number, availH: number, dprRaw: number): ScaleResult {
   const dpr =
@@ -36,15 +48,17 @@ export function computeScale(availW: number, availH: number, dprRaw: number): Sc
   const w = Number.isFinite(availW) && availW > 0 ? availW : 0;
   const h = Number.isFinite(availH) && availH > 0 ? availH : 0;
   const fit = Math.min(w / SCENE_WIDTH, h / SCENE_HEIGHT);
-  // floor() then clamp: never fractional, never zero.
-  const scale = Number.isFinite(fit) ? Math.max(1, Math.floor(fit)) : 1;
+  // Never zero, never below 1. Below 2x DPR, whole numbers only; at 2x and
+  // up, the exact fit, so the canvas fills the stage box the UI sized.
+  let scale = 1;
+  if (Number.isFinite(fit)) scale = dpr >= FRACTIONAL_MIN_DPR ? Math.max(1, fit) : Math.max(1, Math.floor(fit));
   const pixelScale = scale * dpr;
   return {
     scale,
     dpr,
     pixelScale,
-    cssW: SCENE_WIDTH * scale,
-    cssH: SCENE_HEIGHT * scale,
+    cssW: cssRound(SCENE_WIDTH * scale),
+    cssH: cssRound(SCENE_HEIGHT * scale),
     backingW: Math.round(SCENE_WIDTH * pixelScale),
     backingH: Math.round(SCENE_HEIGHT * pixelScale),
   };

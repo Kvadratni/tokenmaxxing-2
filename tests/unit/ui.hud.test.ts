@@ -254,6 +254,34 @@ describe('the report button', () => {
     expect(reportView({ ...d, reportState: 'report' }, 'drafting').disabled).toBe(true);
   });
 
+  it('goes neutral outside a running prompt, whatever reportState says', () => {
+    const d = { ...makeDerived(makeRun({ tokens: 100 })), reportState: 'claim' as const };
+    for (const phase of ['reported', 'drafting'] as const) {
+      expect(reportView(d, phase)).toMatchObject({ state: 'reported', label: 'REPORTED ✓', action: null, disabled: true });
+    }
+    for (const phase of ['compacting', 'won', 'lost'] as const) {
+      expect(reportView(d, phase)).toMatchObject({ state: 'working', label: 'WORKING…', action: null, disabled: true });
+    }
+  });
+
+  it('reads REPORTED ✓ behind the draft, with no verify chance, and S does nothing', () => {
+    const m = mountUI({
+      run: makeRun({ tokens: 60, phase: 'drafting', draftOffer: ['please', 'grandma', 'tip_200'] }),
+      derived: { reportState: 'claim', verifyChance: 0.34 },
+    });
+    const b = reportBtn(m.root);
+    expect(b.getAttribute('data-state')).toBe('reported');
+    expect(b.textContent).toContain('REPORTED ✓');
+    expect(b.textContent).not.toContain('CLAIM');
+    expect(isHidden(must(m.root, TID.verifyChance))).toBe(true);
+    expect(b.disabled).toBe(true);
+    // The draft owns the keyboard; close it and S still does nothing.
+    m.sim.run.phase = 'reported';
+    m.frame();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+    expect(m.actions.filter((a) => a.t === 'report' || a.t === 'claim')).toHaveLength(0);
+  });
+
   it('reads REPORT DONE, green, and sends `report`', () => {
     const m = mountUI({ run: makeRun({ tokens: 100 }) });
     const b = reportBtn(m.root);

@@ -70,10 +70,14 @@ describe('Training', () => {
   });
 
   it('works out every presentation state', () => {
-    const meta = makeMeta({ thumbs: 2, levels: { helpful: 4, unlock_compact: 1 } });
+    const helpfulMax = META_BY_ID['helpful']!.maxLevel;
+    const meta = makeMeta({ levels: { helpful: helpfulMax, unlock_compact: 1 } });
     const cost = (id: string): number => META_BY_ID[id]!.costs[meta.levels[id] ?? 0] ?? Infinity;
+    // Numbers come from content (BALANCE tunes them): one 👍 short of RLHF.
+    meta.thumbs = cost('rlhf') - 1;
     expect(nodeState(META_BY_ID['helpful']!, meta, cost('helpful'))).toBe('owned');
     expect(nodeState(META_BY_ID['rlhf']!, meta, cost('rlhf'))).toBe('tooDear');
+    meta.thumbs = cost('tool_use');
     expect(nodeState(META_BY_ID['tool_use']!, meta, cost('tool_use'))).toBe('available');
     expect(nodeState(META_BY_ID['harmless']!, meta, cost('harmless'))).toBe('teased');
     expect(nodeState(META_BY_ID['honest']!, meta, cost('honest'))).toBe('hidden');

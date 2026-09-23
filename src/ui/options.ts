@@ -72,7 +72,7 @@ export class Options {
     this.resetBtn = btn({ cls: 'tm-btn tm-btn--danger', tid: TID.resetSave, text: 'Reset save', parent: foot });
     this.resetTxt = new Txt(this.resetBtn);
     this.resetTxt.set('Reset save');
-    const close = btn({ cls: 'tm-btn', text: 'Close', parent: foot, tid: 'options-close' });
+    const close = btn({ cls: 'tm-btn', text: 'Close', parent: foot, tid: TID.optionsClose });
 
     this.disposers.push(
       on(this.resetBtn, 'click', () => this.onReset()),

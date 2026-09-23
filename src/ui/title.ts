@@ -52,7 +52,7 @@ export class TitleScreen {
     el('p', { cls: 'tm-title__pitch', text: TAGLINE, parent: this.el });
     el('p', {
       cls: 'tm-title__pitch tm-title__pitch--meta',
-      tid: 'title-meta-pitch',
+      tid: TID.titleMetaPitch,
       text: META_PITCH,
       parent: this.el,
     });

@@ -56,10 +56,10 @@ describe('the report button', () => {
   });
 
   it('moves the threshold with claimThreshold effects, clamped to [MIN, 1]', () => {
-    const s = mkSim({ meta: metaWith({ spec_gaming: 2 }) }); // -0.1
-    expect(s.derived().claimThreshold).toBeCloseTo(0.4, 10);
+    const s = mkSim({ meta: metaWith({ spec_gaming: 2 }) }); // -0.14
+    expect(s.derived().claimThreshold).toBeCloseTo(0.36, 10);
     s.run.owned.push('mock_everything'); // -0.1
-    expect(s.derived().claimThreshold).toBeCloseTo(0.3, 10);
+    expect(s.derived().claimThreshold).toBeCloseTo(0.26, 10);
     s.run.cards.push('skip_the_tests'); // -0.2
     expect(s.derived().claimThreshold).toBe(BALANCE.CLAIM_THRESHOLD_MIN);
 
@@ -188,7 +188,7 @@ describe('claim()', () => {
     s.run.tokens = REQ0 * 0.8;
     s.debug.forceVerify('catch');
     s.claim();
-    expect(s.run.patienceMs).toBeCloseTo(max * (1 - BALANCE.CAUGHT_PENALTY * 0.45), 6);
+    expect(s.run.patienceMs).toBeCloseTo(max * (1 - BALANCE.CAUGHT_PENALTY * 0.25), 6);
   });
 
   it('getting caught with too little patience left loses the run', () => {

@@ -1,6 +1,6 @@
 /**
  * The stage: the 320x180 canvas the renderer draws into, and the DOM laid over
- * it.
+ * it. (The canvas owns every visual on the glass, the prompt included.)
  *
  * - A full-stage pointer surface. Pickups drift anywhere on the canvas, so any
  *   pointer-down is reported (`canvasPointer`); the host decides whether it hit
@@ -9,8 +9,9 @@
  *   It is the keyboard focus for generating and the thing e2e clicks.
  * - The incident banner. Something the human *said* reads as a chat line
  *   (`> wait stop`); the environment reads as a system banner (`529 OVERLOADED`).
- * - A caption along the bottom: the human's prompt as they typed it, or the
- *   compaction line right after you forget everything.
+ * - A screen-reader caption: the human's prompt as they typed it, or the
+ *   compaction line right after you forget everything. Visually hidden: the
+ *   renderer paints the prompt.
  */
 import { INCIDENT_BY_ID, promptAt } from '../sim/content.ts';
 import type { ActiveIncident, RunState } from '../sim/types.ts';
@@ -132,7 +133,13 @@ export class Stage {
       (r) => r.el,
     );
 
-    const cap = el('div', { cls: 'tm-stage__caption', parent: this.el, attrs: { 'aria-hidden': 'true' } });
+    // The canvas draws the prompt on the glass; this copy is only for screen
+    // readers, announced politely when the human types something new.
+    const cap = el('div', {
+      cls: 'tm-stage__caption tm-sr-only',
+      parent: this.el,
+      attrs: { 'aria-live': 'polite', 'aria-atomic': 'true' },
+    });
     this.caption = new Txt(el('span', { cls: 'tm-stage__caption-text', parent: cap }));
     this.captionSys = new Flag(cap, 'is-system');
     this.busy = new Flag(this.el, 'is-compacting');

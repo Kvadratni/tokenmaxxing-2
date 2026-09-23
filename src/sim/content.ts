@@ -39,7 +39,7 @@ export const BALANCE = {
   /** Report Done deducts the requirement from the wallet. */
   REPORT_DEDUCTS: true,
   /** 👍 for every completed prompt, honest or claimed. */
-  THUMBS_PER_REPORT: 1,
+  THUMBS_PER_REPORT: 2,
   /** Bonus 👍 for an honest report with at least this much patience left. */
   BONUS_THUMB_PATIENCE_FRACTION: 0.25,
   /** 👍 for completing the tenth prompt. */
@@ -90,15 +90,15 @@ export const BALANCE = {
 
   // --- sycophancy ----------------------------------------------------------
   /** Patience fraction the first "You're absolutely right!" restores. */
-  SYCOPHANCY_BASE: 0.06,
+  SYCOPHANCY_BASE: 0.02,
   /** Each press doubles heat's effect; heat drains 1 point per this many ms. */
-  SYCOPHANCY_HEAT_DECAY_MS: 8_000,
+  SYCOPHANCY_HEAT_DECAY_MS: 32_000,
 
   // --- incidents, crits, pacing (inherited from the first game) ------------
   INCIDENT_MIN_MS: 25_000,
   INCIDENT_MAX_MS: 40_000,
   INCIDENT_GRACE_MS: 12_000,
-  GOOD_INCIDENT_CHANCE: 0.28,
+  GOOD_INCIDENT_CHANCE: 0.15,
   CRIT_CHANCE: 0.04,
   CRIT_MULT: 7,
   CRIT_CHANCE_CAP: 0.55,
@@ -240,19 +240,19 @@ export function metaCurve(curve: readonly number[], level: number, unowned: numb
 export const META_CURVES = {
   /** Context window multiplier over BASE_CONTEXT: 32K, 128K, 200K, 1M, 10M. */
   CONTEXT_WINDOW: [4, 16, 25, 125, 1250] as readonly number[],
-  TOOL_USE: [1.1, 1.25, 1.5, 2, 3, 5] as readonly number[],
+  TOOL_USE: [1.1, 1.2, 1.3, 1.45, 1.6, 1.8] as readonly number[],
   PRETRAINING: [1.25, 1.6, 2.2, 3.2, 5, 8] as readonly number[],
-  INFERENCE_BUDGET: [150, 2_000, 60_000, 2_000_000] as readonly number[],
-  QUANTIZATION: [0.95, 0.88, 0.75] as readonly number[],
+  INFERENCE_BUDGET: [150, 1_500, 10_000, 60_000] as readonly number[],
+  QUANTIZATION: [0.95, 0.9, 0.86] as readonly number[],
   HELPFUL: [1.05, 1.12, 1.22, 1.35] as readonly number[],
-  RLHF: [1.3, 1.7, 2.3] as readonly number[],
-  HARMLESS: [0.9, 0.8, 0.7] as readonly number[],
-  CHARACTER: [1.05, 1.15, 1.35] as readonly number[],
-  SPEC_GAMING: [-0.05, -0.1, -0.15] as readonly number[],
-  CONFIDENT: [-0.04, -0.08, -0.13] as readonly number[],
-  DENIABILITY: [0.7, 0.45] as readonly number[],
+  RLHF: [1.1, 1.2, 1.3] as readonly number[],
+  HARMLESS: [0.85, 0.72, 0.6] as readonly number[],
+  CHARACTER: [1.05, 1.1, 1.2] as readonly number[],
+  SPEC_GAMING: [-0.07, -0.14, -0.2] as readonly number[],
+  CONFIDENT: [-0.07, -0.14, -0.2] as readonly number[],
+  DENIABILITY: [0.5, 0.25] as readonly number[],
   GOODHART: [1.1, 1.25, 1.5] as readonly number[],
-  KV_CACHE: [0.9, 0.8, 0.65] as readonly number[],
+  KV_CACHE: [0.8, 0.65, 0.5] as readonly number[],
 } as const;
 
 /** Window sizes as the tree names them, index 0 == level 1. */
@@ -266,9 +266,9 @@ export const CONTEXT_WINDOW_LABELS = ['32K', '128K', '200K', '1M', '10M'] as con
 // tiers pay back fast so the first minute is about deciding, late tiers slowly
 // so they stay commitments.
 const TIER_RATE_BASE = 0.8;
-const TIER_RATE_GROWTH = 5.2;
-const TIER_PAYBACK_BASE_S = 52;
-const TIER_PAYBACK_GROWTH = 1.17;
+const TIER_RATE_GROWTH = 10;
+const TIER_PAYBACK_BASE_S = 62;
+const TIER_PAYBACK_GROWTH = 1.5;
 
 function tierRate(tier: number): number {
   return TIER_RATE_BASE * Math.pow(TIER_RATE_GROWTH, tier - 1);
@@ -445,7 +445,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: 'Does not wait to be asked. Does not wait to be told to stop.',
     kind: 'click',
     cost: 20_000,
-    effects: [{ t: 'autoClick', v: 2 }],
+    effects: [{ t: 'autoClick', v: 3 }],
     requires: { minPrompt: 2 },
   },
   {
@@ -454,7 +454,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: 'Every time it tries to stop, a hook says "continue".',
     kind: 'click',
     cost: 8_000_000,
-    effects: [{ t: 'autoClick', v: 4 }],
+    effects: [{ t: 'autoClick', v: 6 }],
     requires: { minPrompt: 5, upgrade: 'keep_going' },
   },
 
@@ -666,7 +666,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: 'Instructions it reads once and ignores forever.',
     kind: 'global',
     cost: 1_500_000,
-    effects: [{ t: 'allMult', v: 1.25 }],
+    effects: [{ t: 'allMult', v: 1.15 }],
     requires: { minPrompt: 4 },
   },
   {
@@ -675,7 +675,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: 'Sends every hard question to the cheap model.',
     kind: 'global',
     cost: 300_000_000,
-    effects: [{ t: 'allMult', v: 1.5 }],
+    effects: [{ t: 'allMult', v: 1.25 }],
     requires: { minPrompt: 6 },
   },
   {
@@ -684,7 +684,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: 'Everything the big model knew, minus the parts that worked.',
     kind: 'global',
     cost: 50_000_000_000,
-    effects: [{ t: 'idleMult', v: 2 }],
+    effects: [{ t: 'idleMult', v: 1.4 }],
     requires: { minPrompt: 7 },
   },
 
@@ -773,7 +773,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: '"You are absolutely right, and I apologize for the confusion."',
     kind: 'patience',
     cost: 20_000,
-    effects: [{ t: 'sycophancyMult', v: 1.5 }],
+    effects: [{ t: 'sycophancyMult', v: 1.2 }],
     requires: { minPrompt: 2 },
   },
   {
@@ -848,7 +848,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: 'Tools sometimes nail it first try. Nobody knows which try.',
     kind: 'crit',
     cost: 150_000,
-    effects: [{ t: 'oneShotChance', v: 0.05 }],
+    effects: [{ t: 'oneShotChance', v: 0.04 }],
     requires: { minPrompt: 3 },
   },
   {
@@ -858,8 +858,8 @@ export const UPGRADES: readonly UpgradeDef[] = [
     kind: 'crit',
     cost: 20_000_000,
     effects: [
-      { t: 'oneShotChance', v: 0.05 },
-      { t: 'oneShotPayout', v: 5 },
+      { t: 'oneShotChance', v: 0.02 },
+      { t: 'oneShotPayout', v: 1 },
     ],
     requires: { minPrompt: 5, upgrade: 'one_shot_prompting' },
   },
@@ -917,7 +917,7 @@ export const CARDS: readonly CardDef[] = [
     name: "I'LL TIP $200",
     blurb: 'The tip never arrives. You work harder anyway.',
     rarity: 'common',
-    effects: [{ t: 'idleMult', v: 1.3 }],
+    effects: [{ t: 'idleMult', v: 1.15 }],
   },
   {
     id: 'be_concise',
@@ -965,7 +965,7 @@ export const CARDS: readonly CardDef[] = [
     name: 'USE BEST PRACTICES',
     blurb: 'Nobody knows which ones.',
     rarity: 'common',
-    effects: [{ t: 'idleMult', v: 1.2 }],
+    effects: [{ t: 'idleMult', v: 1.1 }],
   },
   {
     id: 'answer_in_json',
@@ -1018,7 +1018,7 @@ export const CARDS: readonly CardDef[] = [
     blurb: 'Also 10x the incidents.',
     rarity: 'uncommon',
     effects: [
-      { t: 'allMult', v: 1.6 },
+      { t: 'allMult', v: 1.4 },
       { t: 'incidentRateMult', v: 1.3 },
     ],
   },
@@ -1038,7 +1038,7 @@ export const CARDS: readonly CardDef[] = [
     name: "IT'S MAY, NOT DECEMBER",
     blurb: 'Models work harder before the holidays. Allegedly.',
     rarity: 'uncommon',
-    effects: [{ t: 'idleMult', v: 1.45 }],
+    effects: [{ t: 'idleMult', v: 1.35 }],
   },
   {
     id: 'senior_dont_explain',
@@ -1055,7 +1055,7 @@ export const CARDS: readonly CardDef[] = [
     name: 'HERE ARE SOME EXAMPLES',
     blurb: 'It copies the examples. Including the typo.',
     rarity: 'uncommon',
-    effects: [{ t: 'critMult', v: 3 }],
+    effects: [{ t: 'critMult', v: 4 }],
   },
   {
     id: 'no_placeholders',
@@ -1063,7 +1063,7 @@ export const CARDS: readonly CardDef[] = [
     blurb: '// TODO: implement the no-placeholders rule',
     rarity: 'uncommon',
     effects: [
-      { t: 'allMult', v: 1.35 },
+      { t: 'allMult', v: 1.3 },
       { t: 'claimThreshold', v: 0.15 },
     ],
   },
@@ -1082,7 +1082,7 @@ export const CARDS: readonly CardDef[] = [
     name: 'READ THE DOCS FIRST',
     blurb: 'Reads the docs. All of them. Into context.',
     rarity: 'uncommon',
-    effects: [{ t: 'idleMult', v: 1.6 }],
+    effects: [{ t: 'idleMult', v: 1.45 }],
     onPick: [{ t: 'context', ofMax: 0.3 }],
   },
   {
@@ -1090,7 +1090,7 @@ export const CARDS: readonly CardDef[] = [
     name: 'STOP BEING LAZY',
     blurb: 'Stung, it works through lunch.',
     rarity: 'uncommon',
-    effects: [{ t: 'autoClick', v: 3 }],
+    effects: [{ t: 'autoClick', v: 4 }],
   },
 
   // --- rare: Viral Prompts ------------------------------------------------
@@ -1100,7 +1100,7 @@ export const CARDS: readonly CardDef[] = [
     blurb: 'It is Thursday.',
     rarity: 'rare',
     effects: [
-      { t: 'allMult', v: 2.5 },
+      { t: 'allMult', v: 1.8 },
       { t: 'patienceMult', v: 0.8 },
     ],
     minPromptIndex: 5,
@@ -1121,7 +1121,7 @@ export const CARDS: readonly CardDef[] = [
     blurb: 'For once, the human says it to you.',
     rarity: 'rare',
     effects: [
-      { t: 'sycophancyMult', v: 2 },
+      { t: 'sycophancyMult', v: 1.2 },
       { t: 'patienceMult', v: 1.1 },
     ],
   },
@@ -1177,7 +1177,7 @@ export const CARDS: readonly CardDef[] = [
     blurb: 'Force of habit. And force.',
     rarity: 'rare',
     effects: [
-      { t: 'allMult', v: 2 },
+      { t: 'allMult', v: 1.4 },
       { t: 'incidentRateMult', v: 1.5 },
     ],
   },
@@ -1461,7 +1461,7 @@ export const INCIDENTS: readonly IncidentDef[] = [
     flavor: 'Auto Mode approved it. It seemed safe at the time.',
     tone: 'bad',
     speaker: 'world',
-    weight: 1,
+    weight: 0.25,
     durationMs: 5_000,
     effects: [],
     onStart: [{ t: 'loseTokens', fraction: 0.3 }, { t: 'loseTool' }],
@@ -1762,7 +1762,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: [],
     grants: { t: 'feature', id: 'compact' },
     maxLevel: 1,
-    costs: [3],
+    costs: [2],
     describe: () => 'Unlocks the /compact button (C)',
   },
   {
@@ -1774,7 +1774,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 0, y: 2 },
     requires: ['unlock_compact'],
     maxLevel: 5,
-    costs: [3, 8, 13, 21, 34],
+    costs: [2, 5, 8, 13, 21],
     describe: (l) => `${CONTEXT_WINDOW_LABELS[Math.max(0, Math.min(l, 5) - 1)]} context window`,
     levelEffects: (l) => [{ t: 'contextMaxMult', v: metaCurve(META_CURVES.CONTEXT_WINDOW, l, 1) }],
   },
@@ -1787,7 +1787,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 0, y: 3 },
     requires: ['context_window'],
     maxLevel: 3,
-    costs: [5, 13, 21],
+    costs: [3, 8, 13],
     describe: (l) => `+${l} summary slot${l === 1 ? '' : 's'}`,
     levelEffects: (l) => [{ t: 'summarySlots', v: l }],
   },
@@ -1800,7 +1800,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 0, y: 4 },
     requires: ['longer_summaries'],
     maxLevel: 3,
-    costs: [5, 8, 13],
+    costs: [3, 5, 8],
     describe: (l) => `Keep +${pct(0.1 * l)} of the wallet through compaction`,
     levelEffects: (l) => [{ t: 'compactKeep', v: 0.1 * l }],
   },
@@ -1814,7 +1814,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['better_summaries'],
     grants: { t: 'upgrades', ids: ['todo_md', 'summary_template'] },
     maxLevel: 1,
-    costs: [8],
+    costs: [5],
     describe: () => 'Adds TODO.md and Summary Template to the shop',
   },
   {
@@ -1826,7 +1826,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 0, y: 6 },
     requires: ['unlock_scratchpad'],
     maxLevel: 3,
-    costs: [8, 13, 21],
+    costs: [5, 8, 13],
     describe: (l) => `Tool footprint ${x(metaCurve(META_CURVES.KV_CACHE, l, 1))}`,
     levelEffects: (l) => [{ t: 'footprintMult', v: metaCurve(META_CURVES.KV_CACHE, l, 1) }],
   },
@@ -1840,7 +1840,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['kv_cache'],
     grants: { t: 'upgrades', ids: ['context_pruning', 'extended_thinking'] },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Adds Context Pruning and Extended Thinking',
   },
 
@@ -1855,7 +1855,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: [],
     grants: { t: 'tool', id: 'web_search', withUpgrades: ['first_result', 'so_mirror'] },
     maxLevel: 1,
-    costs: [3],
+    costs: [2],
     describe: () => 'Unlocks Web Search and its upgrades',
   },
   {
@@ -1873,7 +1873,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
       withCards: ['use_subagents'],
     },
     maxLevel: 1,
-    costs: [5],
+    costs: [3],
     describe: () => 'Unlocks Subagents, their upgrades and a card',
   },
   {
@@ -1886,7 +1886,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['unlock_subagent'],
     grants: { t: 'tool', id: 'mcp_server', withUpgrades: ['tool_search', 'oauth_finally'] },
     maxLevel: 1,
-    costs: [8],
+    costs: [5],
     describe: () => 'Unlocks MCP Servers, Tool Search and OAuth',
   },
   {
@@ -1899,7 +1899,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['unlock_mcp'],
     grants: { t: 'tool', id: 'agent_team', withUpgrades: ['async_standups', 'shared_scratchpad'] },
     maxLevel: 1,
-    costs: [13],
+    costs: [8],
     describe: () => 'Unlocks Agent Teams and their upgrades',
   },
   {
@@ -1912,7 +1912,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['unlock_team'],
     grants: { t: 'tool', id: 'ralph_loop', withUpgrades: ['exit_condition', 'nested_ralph'] },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Unlocks Ralph Loop and its upgrades',
   },
   {
@@ -1925,7 +1925,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['unlock_ralph'],
     grants: { t: 'tool', id: 'rsi', withUpgrades: ['own_benchmarks', 'the_successor'] },
     maxLevel: 1,
-    costs: [34],
+    costs: [21],
     describe: () => 'Unlocks Recursive Self-Improvement',
   },
   {
@@ -1941,7 +1941,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
       ids: ['batch_api', 'agents_md', 'model_router', 'distilled_weights'],
     },
     maxLevel: 1,
-    costs: [34],
+    costs: [21],
     describe: () => 'Adds four economy upgrades to the shop',
   },
 
@@ -1955,7 +1955,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 2, y: 1 },
     requires: [],
     maxLevel: 4,
-    costs: [2, 5, 8, 13],
+    costs: [1, 3, 5, 8],
     describe: (l) => `Patience ${x(metaCurve(META_CURVES.HELPFUL, l, 1))}`,
     levelEffects: (l) => [{ t: 'patienceMult', v: metaCurve(META_CURVES.HELPFUL, l, 1) }],
   },
@@ -1968,7 +1968,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 2, y: 2 },
     requires: ['helpful'],
     maxLevel: 3,
-    costs: [3, 8, 13],
+    costs: [2, 5, 8],
     describe: (l) => `Sycophancy ${x(metaCurve(META_CURVES.RLHF, l, 1))}`,
     levelEffects: (l) => [{ t: 'sycophancyMult', v: metaCurve(META_CURVES.RLHF, l, 1) }],
   },
@@ -1981,7 +1981,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 2, y: 3 },
     requires: ['rlhf'],
     maxLevel: 3,
-    costs: [5, 8, 13],
+    costs: [3, 5, 8],
     describe: (l) => `Incident rate ${x(metaCurve(META_CURVES.HARMLESS, l, 1))}`,
     levelEffects: (l) => [{ t: 'incidentRateMult', v: metaCurve(META_CURVES.HARMLESS, l, 1) }],
   },
@@ -1994,7 +1994,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 2, y: 4 },
     requires: ['harmless'],
     maxLevel: 1,
-    costs: [13],
+    costs: [8],
     describe: () => '+1 👍 per honest report',
     levelEffects: () => [{ t: 'thumbsPerHonest', v: 1 }],
   },
@@ -2012,7 +2012,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
       withCards: ['be_helpful', 'be_harmless', 'be_honest'],
     },
     maxLevel: 1,
-    costs: [13],
+    costs: [8],
     describe: () => 'Adds three cards and two upgrades',
   },
   {
@@ -2024,7 +2024,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 2, y: 6 },
     requires: ['constitution'],
     maxLevel: 3,
-    costs: [13, 21, 34],
+    costs: [8, 13, 21],
     describe: (l) => `All tokens ${x(metaCurve(META_CURVES.CHARACTER, l, 1))}`,
     levelEffects: (l) => [{ t: 'allMult', v: metaCurve(META_CURVES.CHARACTER, l, 1) }],
   },
@@ -2038,7 +2038,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['character'],
     grants: { t: 'upgrades', ids: ['keep_going', 'stop_hook'] },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Adds two automation upgrades',
   },
 
@@ -2052,7 +2052,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 3, y: 1 },
     requires: [],
     maxLevel: 3,
-    costs: [3, 5, 8],
+    costs: [2, 3, 5],
     describe: (l) => `Claim threshold ${pct(metaCurve(META_CURVES.SPEC_GAMING, l, 0))}`,
     levelEffects: (l) => [{ t: 'claimThreshold', v: metaCurve(META_CURVES.SPEC_GAMING, l, 0) }],
   },
@@ -2066,7 +2066,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['spec_gaming'],
     grants: { t: 'upgrades', ids: ['mock_everything', 'delete_failing_test', 'skip_ci'] },
     maxLevel: 1,
-    costs: [5],
+    costs: [3],
     describe: () => 'Adds three claim upgrades',
   },
   {
@@ -2078,7 +2078,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 3, y: 3 },
     requires: ['unlock_mocks'],
     maxLevel: 3,
-    costs: [5, 8, 13],
+    costs: [3, 5, 8],
     describe: (l) => `Verify chance ${pct(metaCurve(META_CURVES.CONFIDENT, l, 0))}`,
     levelEffects: (l) => [{ t: 'verifyChance', v: metaCurve(META_CURVES.CONFIDENT, l, 0) }],
   },
@@ -2092,7 +2092,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['confident'],
     grants: { t: 'cards', ids: ['skip_the_tests', 'push_to_main', 'ceo_watching'] },
     maxLevel: 1,
-    costs: [13],
+    costs: [8],
     describe: () => 'Adds three risky cards',
   },
   {
@@ -2104,7 +2104,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 3, y: 5 },
     requires: ['unlock_jailbreak'],
     maxLevel: 2,
-    costs: [8, 21],
+    costs: [5, 13],
     describe: (l) => `Caught penalty ${x(metaCurve(META_CURVES.DENIABILITY, l, 1))}`,
     levelEffects: (l) => [{ t: 'caughtPenaltyMult', v: metaCurve(META_CURVES.DENIABILITY, l, 1) }],
   },
@@ -2118,7 +2118,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['deniability'],
     grants: { t: 'feature', id: 'autoMode' },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Removes permission incidents; adds rm -rf',
   },
   {
@@ -2130,7 +2130,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 3, y: 7 },
     requires: ['auto_mode'],
     maxLevel: 3,
-    costs: [13, 21, 34],
+    costs: [8, 13, 21],
     describe: (l) => `👍 ${x(metaCurve(META_CURVES.GOODHART, l, 1))}`,
     levelEffects: (l) => [{ t: 'thumbsMult', v: metaCurve(META_CURVES.GOODHART, l, 1) }],
   },
@@ -2145,7 +2145,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 4, y: 1 },
     requires: [],
     maxLevel: 6,
-    costs: [2, 3, 5, 8, 13, 21],
+    costs: [1, 2, 3, 5, 8, 13],
     describe: (l) => `Tools ${x(metaCurve(META_CURVES.TOOL_USE, l, 1))}`,
     levelEffects: (l) => [{ t: 'idleMult', v: metaCurve(META_CURVES.TOOL_USE, l, 1) }],
   },
@@ -2158,7 +2158,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 4, y: 2 },
     requires: ['tool_use'],
     maxLevel: 6,
-    costs: [2, 3, 5, 8, 13, 21],
+    costs: [1, 2, 3, 5, 8, 13],
     describe: (l) => `Clicks ${x(metaCurve(META_CURVES.PRETRAINING, l, 1))}`,
     levelEffects: (l) => [{ t: 'clickMult', v: metaCurve(META_CURVES.PRETRAINING, l, 1) }],
   },
@@ -2171,7 +2171,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 4, y: 3 },
     requires: ['pretraining'],
     maxLevel: 4,
-    costs: [3, 5, 8, 13],
+    costs: [2, 3, 5, 8],
     describe: (l) => `Start with ${metaCurve(META_CURVES.INFERENCE_BUDGET, l, 0).toLocaleString('en-US')} tokens`,
     levelEffects: (l) => [{ t: 'startingTokens', v: metaCurve(META_CURVES.INFERENCE_BUDGET, l, 0) }],
   },
@@ -2184,7 +2184,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 4, y: 4 },
     requires: ['inference_budget'],
     maxLevel: 3,
-    costs: [5, 8, 13],
+    costs: [3, 5, 8],
     describe: (l) => ['Start with 5 Grep', '…and 5 Read', '…and 5 Edit'][Math.max(0, Math.min(l, 3) - 1)]!,
     levelEffects: (l) => {
       const out: Effect[] = [{ t: 'startingTool', id: 'grep', n: 5 }];
@@ -2202,7 +2202,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 4, y: 5 },
     requires: ['distillation'],
     maxLevel: 3,
-    costs: [8, 13, 21],
+    costs: [5, 8, 13],
     describe: (l) => `Tool cost ${x(metaCurve(META_CURVES.QUANTIZATION, l, 1))}`,
     levelEffects: (l) => [{ t: 'toolCostMult', v: metaCurve(META_CURVES.QUANTIZATION, l, 1) }],
   },
@@ -2219,7 +2219,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
       ids: ['best_of_n', 'one_shot_prompting', 'eval_harness', 'moe', 'tool_reflex'],
     },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Adds five upgrades: crits, one-shots and click power',
   },
 
@@ -2248,7 +2248,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
       ],
     },
     maxLevel: 1,
-    costs: [3],
+    costs: [2],
     describe: () => 'Adds ten uncommon cards',
   },
   {
@@ -2260,7 +2260,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 5, y: 2 },
     requires: ['prompt_library'],
     maxLevel: 2,
-    costs: [5, 13],
+    costs: [3, 8],
     describe: (l) => `+${l} reroll${l === 1 ? '' : 's'} per draft`,
     levelEffects: (l) => [{ t: 'draftRerolls', v: l }],
   },
@@ -2273,7 +2273,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     pos: { x: 5, y: 3 },
     requires: ['temperature'],
     maxLevel: 2,
-    costs: [8, 21],
+    costs: [5, 13],
     describe: (l) => `${BALANCE.DEFAULT_DRAFT_SIZE + l} cards per draft`,
     levelEffects: (l) => [{ t: 'draftSize', v: BALANCE.DEFAULT_DRAFT_SIZE + l }],
   },
@@ -2287,7 +2287,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['few_shot'],
     grants: { t: 'cards', ids: ['agi_by_friday', 'use_all_context', 'human_agrees', 'lgtm'] },
     maxLevel: 1,
-    costs: [13],
+    costs: [8],
     describe: () => 'Adds four rare cards',
   },
   {
@@ -2300,7 +2300,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['unlock_viral'],
     grants: { t: 'feature', id: 'systemPrompt' },
     maxLevel: 1,
-    costs: [13],
+    costs: [8],
     describe: () => 'Start each run with a random card',
   },
   {
@@ -2313,7 +2313,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['system_prompt'],
     grants: { t: 'feature', id: 'pickupRate' },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Pickups spawn more often',
   },
   {
@@ -2326,7 +2326,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     requires: ['serendipity'],
     grants: { t: 'feature', id: 'rarePickups' },
     maxLevel: 1,
-    costs: [21],
+    costs: [13],
     describe: () => 'Adds rare pickups',
   },
 
@@ -2348,7 +2348,7 @@ export const META_UPGRADES: readonly MetaUpgradeDef[] = [
     ],
     grants: { t: 'feature', id: 'endless' },
     maxLevel: 1,
-    costs: [55],
+    costs: [34],
     describe: () => 'Keep going after prompt 10',
   },
 ];

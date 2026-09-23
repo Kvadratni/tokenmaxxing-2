@@ -106,25 +106,25 @@ describe('click power', () => {
 describe('automation', () => {
   it('fires real clicks, flagged auto, that add context and clear click-to-fix incidents', () => {
     const s = mkSim();
-    s.run.cards.push('stop_being_lazy'); // autoClick 3
+    s.run.cards.push('stop_being_lazy'); // autoClick 4
     s.debug.forceIncident('continue'); // clears with 15 clicks
     const log = record(s);
     tickFor(s, 1000);
     const autos = log.filter((e) => e.t === 'click');
-    expect(autos).toHaveLength(3);
+    expect(autos).toHaveLength(4);
     expect(autos.every((e) => e.t === 'click' && e.auto)).toBe(true);
-    expect(s.run.clicks).toBe(3);
-    expect(s.run.context).toBeCloseTo(3 * BALANCE.CTX_PER_CLICK, 6);
-    expect(s.run.incidents.find((i) => i.id === 'continue')?.clicksRemaining).toBe(12);
-    expect(s.derived().autoClickHz).toBe(3);
+    expect(s.run.clicks).toBe(4);
+    expect(s.run.context).toBeCloseTo(4 * BALANCE.CTX_PER_CLICK, 6);
+    expect(s.run.incidents.find((i) => i.id === 'continue')?.clicksRemaining).toBe(11);
+    expect(s.derived().autoClickHz).toBe(4);
   });
 
   it('owes whole clicks across uneven frames', () => {
     const s = mkSim();
-    s.run.owned.push('keep_going'); // 2/s
+    s.run.owned.push('keep_going'); // 3/s
     for (let i = 0; i < 10; i++) s.tick(333);
     for (let i = 0; i < 10; i++) s.tick(167);
-    expect(s.run.clicks).toBe(10); // 5 s at 2 Hz
+    expect(s.run.clicks).toBe(15); // 5 s at 3 Hz
   });
 });
 
@@ -203,7 +203,7 @@ describe('tools', () => {
     s.run.promptIndex = 3;
     s.run.owned.push('batch_api');
     const d = s.derived();
-    expect(d.toolCostMult).toBeCloseTo(0.88 * 0.85, 10);
+    expect(d.toolCostMult).toBeCloseTo(0.9 * 0.85, 10);
     const quote = bulkToolCost(TOOL_BY_ID.grep, s.run.tools.grep, 10, d.toolCostMult);
     s.run.tokens = quote;
     expect(s.buyTool('grep', 10)).toBe(true);
@@ -226,7 +226,7 @@ describe('tools', () => {
     const s = mkSim({
       meta: metaWith({ tool_use: 1, pretraining: 1, inference_budget: 1, distillation: 1, quantization: 3 }),
     });
-    expect(s.derived().nextCosts.grep).toBe(toolCostAt(TOOL_BY_ID.grep, s.run.tools.grep, 0.75));
+    expect(s.derived().nextCosts.grep).toBe(toolCostAt(TOOL_BY_ID.grep, s.run.tools.grep, 0.86));
   });
 
   it('buys atomically: a short wallet moves nothing', () => {
@@ -338,11 +338,11 @@ describe('one-shots', () => {
 
   it('pay (base + oneShotPayout) seconds of idle rate at the rolled chance', () => {
     const s = mkSim();
-    s.run.owned.push('one_shot_prompting', 'eval_harness'); // 0.1, +5 s
+    s.run.owned.push('one_shot_prompting', 'eval_harness'); // 0.06, +1 s
     s.run.tools.grep = 10;
     const d = s.derived();
-    expect(d.oneShotChance).toBeCloseTo(0.1, 10);
-    expect(d.oneShotPayoutS).toBe(BALANCE.ONE_SHOT_BASE_PAYOUT_S + 5);
+    expect(d.oneShotChance).toBeCloseTo(0.06, 10);
+    expect(d.oneShotPayoutS).toBe(BALANCE.ONE_SHOT_BASE_PAYOUT_S + 1);
     const log = record(s);
     const rolls = 3000;
     for (let i = 0; i < rolls; i++) {
@@ -351,11 +351,11 @@ describe('one-shots', () => {
       s.run.patienceMs = s.patienceMaxMs;
     }
     const shots = log.filter((e): e is Extract<GameEvent, { t: 'oneShot' }> => e.t === 'oneShot');
-    expect(shots.length / rolls).toBeGreaterThan(0.07);
-    expect(shots.length / rolls).toBeLessThan(0.13);
+    expect(shots.length / rolls).toBeGreaterThan(0.04);
+    expect(shots.length / rolls).toBeLessThan(0.08);
     for (const shot of shots) {
-      expect(shot.seconds).toBe(10);
-      expect(shot.amount).toBeCloseTo(d.idleRate * 10, 6);
+      expect(shot.seconds).toBe(6);
+      expect(shot.amount).toBeCloseTo(d.idleRate * 6, 6);
     }
   });
 

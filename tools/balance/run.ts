@@ -1,374 +1,320 @@
 /**
  * One seeded headless game under one policy.
  *
- * Drives the real sim: fixed simulation steps, a duty-cycled click stream, and
- * a purchase/ship decision on a slower cadence (humans do not re-plan 20×/s).
+ * Drives the real sim: fixed simulation steps, a duty-cycled click stream, a
+ * reflex layer every step (pickups, overflow, flattery, claims) and a shopping
+ * decision on a slower cadence, because humans do not re-plan 20 times a second.
  */
-import type {
-  AgentTierId,
-  CardId,
-  GameEvent,
-  IncidentId,
-  MetaState,
-  UpgradeId,
-} from '@sim/types.ts';
-import {
-  AGENT_TIER_IDS,
-  BALANCE,
-  FINAL_PROJECT_INDEX,
-  INCIDENT_BY_ID,
-  createSim,
-  projectAt,
-} from '@sim/index.ts';
-import type { ClickModel, Policy, PolicyId, PolicyOptions } from './policy.ts';
-import { HUMAN_CLICKS, averageCps, instantCps, makePolicy } from './policy.ts';
+import type { CardId, GameEvent, IncidentId, MetaState, ToolId, UpgradeId } from '@sim/types.ts';
+import { FINAL_PROMPT_INDEX, INCIDENT_BY_ID, TOOL_IDS, createSim } from '@sim/index.ts';
+import type { Sim } from '@sim/index.ts';
+import type { Bot, ClickModel, PolicyConfig, PolicyId, PolicyOptions } from './policy.ts';
+import { CLICK_AT, HUMAN_CLICKS, instantCps, makeBot } from './policy.ts';
 
-export type DeathCause = 'deadline' | 'demo-day' | 'step-cap';
-
-/** State captured the instant a project ships (or the run dies). */
-export interface ProjectSnapshot {
-  readonly projectNumber: number;
-  readonly seconds: number;
-  readonly requirement: number;
-  readonly slop: number;
-  readonly idleRate: number;
-  readonly clickPower: number;
-  readonly agents: string;
-  readonly upgrades: number;
-  readonly cards: number;
-}
+export type EndCause = 'won' | 'patience' | 'caught' | 'compaction' | 'step-cap';
 
 export interface RunResult {
   readonly seed: number;
-  readonly policy: PolicyId;
+  readonly policy: string;
   readonly metaName: string;
-  /** Projects successfully shipped. */
-  readonly shipped: number;
-  /** 1-based number of the project the run was sitting on when it ended. */
-  readonly reachedProject: number;
-  /** Reached Demo Day (shipped all 10). */
   readonly won: boolean;
-  readonly cause: DeathCause;
-  /** slop / requirement at the moment of death, 0..1+. */
-  readonly deathProgress: number;
-  /** Wall seconds spent on each shipped project, in order. */
-  readonly secondsPerProject: readonly number[];
-  readonly demos: number;
-  readonly peakIdleRate: number;
-  readonly peakClickPower: number;
-  readonly purchases: number;
-  readonly agentsBought: Readonly<Record<AgentTierId, number>>;
-  readonly upgrades: readonly UpgradeId[];
-  readonly cards: readonly CardId[];
-  /** Every card the drafter was shown, across all offers and rerolls. */
-  readonly offered: readonly CardId[];
-  readonly incidentsBad: number;
-  readonly incidentsGood: number;
-  readonly incidentIds: readonly IncidentId[];
+  /** Prompts completed (honestly or by a claim that passed). */
+  readonly reported: number;
+  /** 1-based prompt the run ended on (10 for a win). */
+  readonly reachedPrompt: number;
+  readonly cause: EndCause;
+  /** Wallet / requirement when the run ended, 0..1+. */
+  readonly endProgress: number;
+  /** Sim seconds, report beats included, paused pickers excluded. */
   readonly elapsedS: number;
-  readonly steps: number;
+  /** Sim seconds spent on each completed prompt, in order. */
+  readonly promptSeconds: readonly number[];
+  readonly forcedCompactions: number;
+  readonly manualCompactions: number;
+  /** Forced compactions per prompt index (0-based). */
+  readonly forcedByPrompt: readonly number[];
+  readonly manualByPrompt: readonly number[];
+  readonly claimsPassed: number;
+  readonly caught: number;
+  readonly sycophancy: number;
+  /** 👍 banked at run end. */
+  readonly thumbs: number;
   readonly clicks: number;
-  // --- tension instrumentation ---
+  readonly purchases: number;
+  readonly tools: Readonly<Record<ToolId, number>>;
+  readonly upgrades: readonly UpgradeId[];
+  /** Cards held at the end. */
+  readonly cards: readonly CardId[];
+  /** Every card drafted this run, compacted-away ones included. */
+  readonly drafted: readonly CardId[];
+  readonly offered: readonly CardId[];
+  readonly incidentIds: readonly IncidentId[];
+  readonly pickups: number;
   readonly decisions: number;
-  /** Decisions where the wallet was already over the bar. */
-  readonly shipReadyDecisions: number;
-  /** Decisions where shipping *and* a worthwhile purchase were both available. */
+  readonly reportReadyDecisions: number;
   readonly tensionDecisions: number;
-  /** Decisions where it bought while able to ship. */
-  readonly buyOverShipDecisions: number;
-  /** Decisions where a worthwhile purchase existed but was unaffordable. */
-  readonly bankedDecisions: number;
-  /** Best affordable tier by rate-per-slop, per project index (modal). */
-  readonly bestTierByProject: readonly (AgentTierId | null)[];
-  readonly bestTierCounts: Readonly<Record<AgentTierId, number>>;
+  readonly boughtOverReportDecisions: number;
+  /** Longest single prompt, as a multiple of its base patience. */
+  readonly longestPromptRatio: number;
   /** True if any state value went NaN / Infinite / negative. */
   readonly invalid: boolean;
-  /** Only populated when `trace` is set. */
-  readonly snapshots: readonly ProjectSnapshot[];
+  /** The meta after banking this run's 👍 (a copy). */
+  readonly metaAfter: MetaState;
 }
 
 export interface RunConfig {
   readonly seed: number;
-  readonly policy: PolicyId | Policy;
+  readonly policy: PolicyId | PolicyConfig;
   readonly meta: MetaState;
   readonly metaName?: string;
   readonly clicks?: ClickModel;
   /** Simulation step. Keep <= BALANCE.MAX_STEP_MS so a tick is one integration. */
   readonly stepMs?: number;
-  /** How often the bot re-plans purchases / shipping. */
+  /** How often the bot re-plans purchases and reporting. */
   readonly decisionEveryMs?: number;
-  /** Soft-lock guard. */
-  readonly maxSteps?: number;
-  /** Stop (and bank) once this many projects have shipped. */
-  readonly stopAfterShipped?: number;
-  /** Force these cards whenever offered — used by the card-health experiment. */
-  readonly forceCards?: readonly CardId[];
-  /** Never take these cards — the control arm of the same experiment. */
-  readonly banCards?: readonly CardId[];
-  /** Force/ban shop entries — used by the risk-upgrade experiment. */
+  /** Hard cap on simulated time, in ms. */
+  readonly maxMs?: number;
   readonly policyOptions?: PolicyOptions;
-  /** Capture a per-project snapshot (diagnostics only — costs a little time). */
-  readonly trace?: boolean;
+  /** Diagnostics: every sim event, with the sim that emitted it. */
+  readonly onEvent?: (e: GameEvent, sim: Sim) => void;
 }
 
 export const DEFAULT_STEP_MS = 200;
 export const DEFAULT_DECISION_MS = 1_000;
-/** 40 minutes of simulated play at the default step: far past any real run. */
-export const DEFAULT_MAX_STEPS = 12_000;
-
-function emptyTierRecord(): Record<AgentTierId, number> {
-  const out = {} as Record<AgentTierId, number>;
-  for (const id of AGENT_TIER_IDS) out[id] = 0;
-  return out;
-}
-
-function snapshot(sim: ReturnType<typeof createSim>, projectNumber: number, seconds: number): ProjectSnapshot {
-  const d = sim.derived();
-  const agents = AGENT_TIER_IDS.map((id) => sim.run.agents[id])
-    .join('/')
-    .replace(/(\/0)+$/, '');
-  return {
-    projectNumber,
-    seconds,
-    requirement: d.requirement,
-    slop: sim.run.slop,
-    idleRate: d.idleRate,
-    clickPower: d.clickPower,
-    agents,
-    upgrades: sim.run.owned.length,
-    cards: sim.run.cards.length,
-  };
-}
+/** 90 minutes: far past any real session. */
+export const DEFAULT_MAX_MS = 90 * 60 * 1000;
 
 export function cloneMeta(meta: MetaState): MetaState {
   return {
     ...meta,
     levels: { ...meta.levels },
+    achievements: { ...meta.achievements },
+    stats: { ...meta.stats },
     settings: { ...meta.settings },
   };
+}
+
+function emptyToolRecord(): Record<ToolId, number> {
+  const out = {} as Record<ToolId, number>;
+  for (const id of TOOL_IDS) out[id] = 0;
+  return out;
 }
 
 export function runOne(cfg: RunConfig): RunResult {
   const clicks = cfg.clicks ?? HUMAN_CLICKS;
   const stepMs = cfg.stepMs ?? DEFAULT_STEP_MS;
   const decisionMs = cfg.decisionEveryMs ?? DEFAULT_DECISION_MS;
-  const maxSteps = cfg.maxSteps ?? DEFAULT_MAX_STEPS;
-  const stopAfter = cfg.stopAfterShipped ?? FINAL_PROJECT_INDEX + 1;
-  const policy: Policy =
-    typeof cfg.policy === 'string' ? makePolicy(cfg.policy, cfg.policyOptions ?? {}) : cfg.policy;
-  const avgCps = averageCps(clicks);
-  const forced = cfg.forceCards ? new Set(cfg.forceCards) : null;
-  const banned = cfg.banCards ? new Set(cfg.banCards) : null;
-
+  const maxMs = cfg.maxMs ?? DEFAULT_MAX_MS;
   const meta = cloneMeta(cfg.meta);
-  const secondsPerProject: number[] = [];
-  let incidentsBad = 0;
-  let incidentsGood = 0;
-  const incidentIds: IncidentId[] = [];
-  const offered: CardId[] = [];
-  const snapshots: ProjectSnapshot[] = [];
-  let purchases = 0;
-  let bankedDemos = 0;
+  // Settle the one-time game-1 import up front: there is no game-1 save here.
+  if (meta.legacy === null) meta.legacy = { verdict: 'none' };
 
-  const sim = createSim({
+  const promptSeconds: number[] = [];
+  const forcedByPrompt: number[] = [];
+  const manualByPrompt: number[] = [];
+  const offered: CardId[] = [];
+  const drafted: CardId[] = [];
+  const incidentIds: IncidentId[] = [];
+  let purchases = 0;
+  let thumbs = 0;
+  let pickups = 0;
+  let promptStartMs = 0;
+  let caughtAtMs = -1;
+  let forcedAtMs = -1;
+  let longestRatio = 0;
+  let bot: Bot | null = null;
+  let sim: Sim | null = null;
+
+  const bump = (arr: number[], i: number): void => {
+    while (arr.length <= i) arr.push(0);
+    arr[i] = (arr[i] ?? 0) + 1;
+  };
+
+  const onEvent = (e: GameEvent): void => {
+    if (!sim) return;
+    cfg.onEvent?.(e, sim);
+    switch (e.t) {
+      case 'buyTool':
+        if (e.cost > 0) purchases += 1;
+        break;
+      case 'buyUpgrade':
+        purchases += 1;
+        break;
+      case 'report':
+      case 'claim': {
+        if (e.t === 'claim' && e.caught) {
+          caughtAtMs = sim.run.elapsedMs;
+          break;
+        }
+        const s = (sim.run.elapsedMs - promptStartMs) / 1000;
+        promptSeconds.push(s);
+        const base = sim.patienceMaxMs / 1000;
+        if (base > 0) longestRatio = Math.max(longestRatio, s / base);
+        break;
+      }
+      case 'compactStart':
+        if (e.forced) forcedAtMs = sim.run.elapsedMs;
+        bump(e.forced ? forcedByPrompt : manualByPrompt, sim.run.promptIndex);
+        break;
+      case 'draftOpen':
+        for (const c of e.offer) offered.push(c);
+        break;
+      case 'draftPick':
+        drafted.push(e.id);
+        break;
+      case 'incidentStart':
+        incidentIds.push(e.id);
+        break;
+      case 'pickupCollect':
+        pickups += 1;
+        break;
+      case 'runOver':
+        thumbs = e.thumbs;
+        break;
+      default:
+        break;
+    }
+  };
+
+  sim = createSim({
     seed: cfg.seed,
     meta,
     storage: null,
     persist: false,
     autoStart: false,
-    onEvent: (e: GameEvent) => {
-      switch (e.t) {
-        case 'buyAgent':
-        case 'buyUpgrade':
-          purchases += 1;
-          break;
-        case 'incidentStart':
-          if (e.tone === 'good') incidentsGood += 1;
-          else incidentsBad += 1;
-          incidentIds.push(e.id);
-          break;
-        case 'ship': {
-          const seconds = (sim.deadlineMs - e.timeLeftMs) / 1000;
-          secondsPerProject.push(seconds);
-          if (cfg.trace) snapshots.push(snapshot(sim, e.projectIndex + 1, seconds));
-          break;
-        }
-        case 'draftOpen':
-          for (const c of e.offer) offered.push(c);
-          break;
-        case 'runOver':
-          bankedDemos = e.demos;
-          break;
-        default:
-          break;
-      }
-    },
+    trustSave: true,
+    legacyStorage: null,
+    onEvent,
   });
+  bot = makeBot(cfg.policy, clicks, cfg.seed, cfg.policyOptions ?? {});
   sim.startRun(cfg.seed);
 
-  // Deterministic per-seed offset so every bot does not rest in lockstep.
+  // Per-seed offset so every bot does not rest in lockstep.
   const phaseMs = (Math.abs(cfg.seed) % Math.max(1, clicks.dutyPeriodMs || 1)) | 0;
 
-  let steps = 0;
-  let sinceDecision = decisionMs; // decide on the very first step
+  let sinceDecision = decisionMs;
   let clickCredit = 0;
-  let peakIdleRate = 0;
-  let peakClickPower = 0;
   let decisions = 0;
-  let shipReadyDecisions = 0;
-  let tensionDecisions = 0;
-  let buyOverShipDecisions = 0;
-  let bankedDecisions = 0;
+  let reportReady = 0;
+  let tension = 0;
+  let boughtOverReport = 0;
   let invalid = false;
-  const bestTierCounts = emptyTierRecord();
-  const perProjectTierCounts: Record<AgentTierId, number>[] = [];
+  let promptIndex = 0;
+  let guard = 0;
 
-  function noteInvalid(): void {
-    const r = sim.run;
-    if (!Number.isFinite(r.slop) || r.slop < 0) invalid = true;
-    if (!Number.isFinite(r.timeLeftMs)) invalid = true;
-    if (!Number.isFinite(r.pendingDemos) || r.pendingDemos < 0) invalid = true;
-  }
+  while (sim.run.elapsedMs < maxMs && guard < 2_000_000) {
+    guard += 1;
+    const run = sim.run;
+    if (run.phase === 'won' || run.phase === 'lost') break;
 
-  while (steps < maxSteps) {
-    const phase = sim.run.phase;
-    if (phase === 'won' || phase === 'lost') break;
+    if (run.promptIndex !== promptIndex) {
+      promptIndex = run.promptIndex;
+      promptStartMs = run.elapsedMs;
+      bot.notePrompt(sim);
+    }
 
-    if (phase === 'drafting') {
-      const offer = sim.run.draftOffer.slice();
-      if (offer.length === 0) {
-        sim.endRun(false);
-        break;
-      }
-      let choice: CardId | null = null;
-      if (forced) {
-        choice = offer.find((c) => forced.has(c)) ?? null;
-      }
-      if (choice === null) {
-        const allowed = banned ? offer.filter((c) => !banned.has(c)) : offer;
-        choice = policy.draft(sim, allowed.length > 0 ? allowed : offer, avgCps);
+    if (run.phase === 'drafting') {
+      const choice = bot.draft(sim);
+      if (choice === 'reroll') {
+        if (!sim.rerollDraft()) {
+          const first = sim.run.draftOffer[0];
+          if (!first || !sim.pickCard(first)) break;
+        }
+        continue;
       }
       if (choice === null || !sim.pickCard(choice)) {
-        // Nothing legal to pick: bank and stop rather than spin.
-        sim.endRun(false);
-        break;
+        const first = sim.run.draftOffer[0];
+        if (!first || !sim.pickCard(first)) break;
       }
       continue;
     }
 
-    if (phase === 'running') {
+    if (run.phase === 'compacting') {
+      if (!sim.keepCards(bot.keep(sim))) sim.keepCards([]);
+      continue;
+    }
+
+    if (run.phase === 'running') {
+      const cpsNow = instantCps(clicks, run.elapsedMs, phaseMs);
+      bot.reflex(sim, cpsNow);
+      if (sim.run.phase !== 'running') continue;
+
       sinceDecision += stepMs;
       if (sinceDecision >= decisionMs) {
         sinceDecision = 0;
-        const projectIndex = sim.run.projectIndex;
-        const log = policy.decide(sim, avgCps);
+        const log = bot.decide(sim);
         decisions += 1;
-        if (log.canShip) shipReadyDecisions += 1;
-        if (log.tension) tensionDecisions += 1;
-        if (log.boughtOverShip) buyOverShipDecisions += 1;
-        if (log.banked) bankedDecisions += 1;
-        if (log.bestTier) {
-          bestTierCounts[log.bestTier] += 1;
-          let bucket = perProjectTierCounts[projectIndex];
-          if (!bucket) {
-            bucket = emptyTierRecord();
-            perProjectTierCounts[projectIndex] = bucket;
-          }
-          bucket[log.bestTier] += 1;
-        }
-        if (sim.run.shipped >= stopAfter) break;
+        if (log.canReport) reportReady += 1;
+        if (log.tension) tension += 1;
+        if (log.boughtOverReport) boughtOverReport += 1;
         if (sim.run.phase !== 'running') continue;
       }
 
-      const d = sim.derived();
-      if (d.idleRate > peakIdleRate) peakIdleRate = d.idleRate;
-      if (d.clickPower > peakClickPower) peakClickPower = d.clickPower;
-
-      clickCredit += (instantCps(clicks, sim.run.elapsedMs, phaseMs) * stepMs) / 1000;
-      let guard = 0;
-      while (clickCredit >= 1 && guard < 64 && sim.run.phase === 'running') {
+      clickCredit += (cpsNow * stepMs) / 1000;
+      let n = 0;
+      while (clickCredit >= 1 && n < 64 && sim.run.phase === 'running') {
         clickCredit -= 1;
-        guard += 1;
-        sim.click(160, 120);
+        n += 1;
+        sim.click(CLICK_AT.x, CLICK_AT.y);
       }
     }
 
     sim.tick(stepMs);
-    steps += 1;
-    noteInvalid();
+    const r = sim.run;
+    if (!Number.isFinite(r.tokens) || r.tokens < -1e-6) invalid = true;
+    if (!Number.isFinite(r.patienceMs) || !Number.isFinite(r.context)) invalid = true;
   }
 
   const run = sim.run;
-  const shipped = run.shipped;
-  const reachedDemoDay = shipped >= FINAL_PROJECT_INDEX + 1;
-  let cause: DeathCause;
-  if (reachedDemoDay) cause = 'demo-day';
-  else if (steps >= maxSteps) cause = 'step-cap';
-  else cause = 'deadline';
+  const capped = run.phase !== 'won' && run.phase !== 'lost';
+  if (capped) sim.endRun(false);
+  const won = run.phase === 'won';
+  let cause: EndCause;
+  if (won) cause = 'won';
+  else if (capped) cause = 'step-cap';
+  else if (caughtAtMs === run.elapsedMs) cause = 'caught';
+  else if (forcedAtMs === run.elapsedMs) cause = 'compaction';
+  else cause = 'patience';
 
-  const requirement = projectAt(run.projectIndex).requirement;
-  const deathProgress = requirement > 0 ? Math.max(0, run.slop) / requirement : 0;
-  const agentsBought = emptyTierRecord();
-  for (const id of AGENT_TIER_IDS) agentsBought[id] = run.agents[id];
-  const upgrades = run.owned.slice();
-  const cards = run.cards.slice();
-  const elapsedS = run.elapsedMs / 1000;
-  const clickCount = run.clicks;
-
-  if (run.phase !== 'won' && run.phase !== 'lost') sim.endRun(reachedDemoDay);
-
-  const bestTierByProject: (AgentTierId | null)[] = [];
-  for (let i = 0; i <= Math.max(0, run.projectIndex); i++) {
-    const bucket = perProjectTierCounts[i];
-    if (!bucket) {
-      bestTierByProject.push(null);
-      continue;
-    }
-    let best: AgentTierId | null = null;
-    let bestN = 0;
-    for (const id of AGENT_TIER_IDS) {
-      const n = bucket[id];
-      if (n > bestN) {
-        bestN = n;
-        best = id;
-      }
-    }
-    bestTierByProject.push(best);
-  }
+  const req = sim.derived().requirement;
+  const tools = emptyToolRecord();
+  for (const id of TOOL_IDS) tools[id] = run.tools[id];
 
   return {
     seed: cfg.seed,
-    policy: policy.id,
+    policy: bot.cfg.id,
     metaName: cfg.metaName ?? 'custom',
-    shipped,
-    reachedProject: Math.min(run.projectIndex + 1, FINAL_PROJECT_INDEX + 1),
-    won: reachedDemoDay,
+    won,
+    reported: run.reported,
+    reachedPrompt: won ? FINAL_PROMPT_INDEX + 1 : Math.min(run.promptIndex + 1, FINAL_PROMPT_INDEX + 1),
     cause,
-    deathProgress,
-    secondsPerProject,
-    demos: bankedDemos,
-    peakIdleRate,
-    peakClickPower,
+    endProgress: req > 0 ? Math.max(0, run.tokens) / req : 0,
+    elapsedS: run.elapsedMs / 1000,
+    promptSeconds,
+    forcedCompactions: run.forcedCompactions,
+    manualCompactions: run.compactions - run.forcedCompactions,
+    forcedByPrompt,
+    manualByPrompt,
+    claimsPassed: run.claimed,
+    caught: run.caught,
+    sycophancy: run.sycophancy,
+    thumbs,
+    clicks: run.clicks,
     purchases,
-    agentsBought,
-    upgrades,
-    cards,
+    tools,
+    upgrades: run.owned.slice(),
+    cards: run.cards.slice(),
+    drafted,
     offered,
-    incidentsBad,
-    incidentsGood,
     incidentIds,
-    elapsedS,
-    steps,
-    clicks: clickCount,
+    pickups,
     decisions,
-    shipReadyDecisions,
-    tensionDecisions,
-    buyOverShipDecisions,
-    bankedDecisions,
-    bestTierByProject,
-    bestTierCounts,
+    reportReadyDecisions: reportReady,
+    tensionDecisions: tension,
+    boughtOverReportDecisions: boughtOverReport,
+    longestPromptRatio: longestRatio,
     invalid,
-    snapshots,
+    metaAfter: cloneMeta(sim.meta),
   };
 }
 
@@ -376,7 +322,3 @@ export function runOne(cfg: RunConfig): RunResult {
 export function incidentLabel(id: IncidentId): string {
   return INCIDENT_BY_ID[id]?.name ?? id;
 }
-
-/** The number of decision ticks a full-length run can hold, for sanity checks. */
-export const MAX_RUN_SECONDS =
-  (BALANCE.DEADLINE_BASE_MS / 1000) * (FINAL_PROJECT_INDEX + 1) * 2;

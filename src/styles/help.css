@@ -173,6 +173,30 @@
   animation: tm-coach-in 160ms ease-out;
 }
 
+/* A pixel pointer back at the anchor: down from above, up from below. */
+.tm-coach__tip[data-side='above']::after,
+.tm-coach__tip[data-side='below']::after {
+  content: '';
+  position: absolute;
+  left: var(--aim, 50%);
+  width: 0;
+  height: 0;
+  margin-left: calc(-6 * var(--g));
+  border: calc(6 * var(--g)) solid transparent;
+}
+
+.tm-coach__tip[data-side='above']::after {
+  top: 100%;
+  border-top-color: var(--amber);
+  border-bottom-width: 0;
+}
+
+.tm-coach__tip[data-side='below']::after {
+  bottom: 100%;
+  border-bottom-color: var(--amber);
+  border-top-width: 0;
+}
+
 /* No anchor to pin to (or nothing measurable): park it out of the way. */
 .tm-coach__tip.is-corner {
   left: auto;

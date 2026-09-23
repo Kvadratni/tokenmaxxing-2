@@ -117,6 +117,20 @@
   flex: 1 1 auto;
 }
 
+/* Present for assistive tech, absent from the screen. */
+.tm-ui .tm-sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 /* --------------------------------------------------------------------- */
 /* top bar                                                               */
 /* --------------------------------------------------------------------- */
@@ -757,6 +771,15 @@
   white-space: nowrap;
 }
 
+/* Every face is the same box: label line + second line, borders included. */
+.tm-report {
+  box-sizing: border-box;
+}
+
+.tm-report__face {
+  height: calc(20 * var(--g));
+}
+
 .tm-report__icon {
   display: none;
   --isz: calc(16 * var(--g));
@@ -765,6 +788,8 @@
 .tm-report__sub,
 .tm-report__verify {
   max-width: 100%;
+  height: var(--lh);
+  line-height: var(--lh);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -827,6 +852,13 @@
 
 .tm-report[data-state='working'] .tm-report__label {
   color: var(--fg1);
+}
+
+/* Done, and waiting on the human: neutral, not a call to action. */
+.tm-report[data-state='reported'] {
+  color: var(--green);
+  border-color: var(--green2);
+  background: var(--bg2);
 }
 
 /* dithered glow behind a live button, the concept's green halo */
@@ -1584,6 +1616,10 @@
   letter-spacing: var(--track);
 }
 
+.tm-row--capped {
+  cursor: not-allowed;
+}
+
 .tm-row--capped .tm-row__cost {
   color: var(--fg2);
 }
@@ -2288,7 +2324,10 @@
   /* `safe` keeps the top reachable when the content is taller than the screen */
   justify-content: safe center;
   gap: var(--gap2);
-  padding: calc(16 * var(--u)) calc(6 * var(--u)) calc(6 * var(--u));
+  /* Clear the top bar, which floats above every screen: its measured height
+     (index.ts writes --topbar-h on resize), or 16 units before the first. */
+  padding: max(calc(16 * var(--u)), calc(var(--topbar-h, 0px) + var(--gap2))) calc(6 * var(--u))
+    calc(6 * var(--u));
   overflow-y: auto;
   background: var(--bg0);
 }
@@ -2647,7 +2686,6 @@
 .tm-achv {
   justify-content: flex-start;
   align-items: stretch;
-  padding: var(--gap2);
 }
 
 .tm-achv__head {

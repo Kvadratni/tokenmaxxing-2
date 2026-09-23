@@ -70,7 +70,7 @@ describe('startRun', () => {
 
   it('applies starting tokens and tools from Training', () => {
     const s = mkSim({ meta: metaWith({ tool_use: 1, pretraining: 1, inference_budget: 2, distillation: 3 }) });
-    expect(s.run.tokens).toBe(2_000);
+    expect(s.run.tokens).toBe(1_500);
     expect(s.run.tools.grep).toBe(5);
     expect(s.run.tools.read).toBe(5);
     expect(s.run.tools.edit).toBe(5);
@@ -128,7 +128,7 @@ describe('report()', () => {
     expect(s.run.reported).toBe(1);
     expect(s.run.pendingThumbs).toBe(BALANCE.THUMBS_PER_REPORT + 1);
     expect(s.run.phase).toBe('reported');
-    expect(log.find((e) => e.t === 'report')).toEqual({ t: 'report', promptIndex: 0, thumbs: 2, patienceLeft: 1 });
+    expect(log.find((e) => e.t === 'report')).toEqual({ t: 'report', promptIndex: 0, thumbs: 3, patienceLeft: 1 });
   });
 
   it('withholds the bonus below BONUS_THUMB_PATIENCE_FRACTION', () => {

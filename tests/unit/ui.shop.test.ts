@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TOOL_BY_ID, UPGRADE_BY_ID } from '../../src/sim/content.ts';
 import { bulkToolCost, formatTokens } from '../../src/sim/index.ts';
 import { TID, tid } from '../../src/testids.ts';
+import { fmtRate } from '../../src/ui/format.ts';
 import { fmtFootprint, footprintWeight, LOCKED_TEASERS, QTY_CYCLE } from '../../src/ui/shop.ts';
-import { isHidden, makeMeta, makeRun, mountUI, must, q, unmountAll } from './ui.fake-sim.ts';
+import { isHidden, key, makeMeta, makeRun, mountUI, must, q, unmountAll } from './ui.fake-sim.ts';
 
 afterEach(unmountAll);
 
@@ -26,7 +27,7 @@ describe('tool rows', () => {
     expect(must(m.root, tid(TID.toolCost, 'read')).textContent).toBe(
       formatTokens(Math.round(def.baseCost * Math.pow(def.costGrowth, 3))),
     );
-    expect(r.querySelector('.tm-row__rate')!.textContent).toBe(`${(def.baseRate * 3).toFixed(1)}/s`);
+    expect(r.querySelector('.tm-row__rate')!.textContent).toBe(`${fmtRate(def.baseRate * 3)}/s`);
   });
 
   it('flags a heavy footprint and a feather-light one differently', () => {
@@ -89,11 +90,27 @@ describe('tool rows', () => {
     expect(row(m.root, 'grep').disabled).toBe(true);
   });
 
-  it('shows a tool at its cap as MAXED', () => {
-    const m = mountUI({ run: makeRun({ tokens: 1e12, tools: { grep: 60 } as never }) });
+  it('shows a tool at its cap as MAXED, and says so when asked to buy one', () => {
+    const cap = TOOL_BY_ID.grep.maxOwned;
+    const m = mountUI({ run: makeRun({ tokens: 1e12, tools: { grep: cap } as never }) });
+    const r = row(m.root, 'grep');
     expect(must(m.root, tid(TID.toolCost, 'grep')).textContent).toBe('MAXED');
-    expect(row(m.root, 'grep').disabled).toBe(true);
-    expect(must(m.root, tid(TID.toolOwned, 'grep')).textContent).toBe('×60/60');
+    expect(must(m.root, tid(TID.toolOwned, 'grep')).textContent).toBe(`×${cap}/${cap}`);
+    // aria-disabled rather than disabled, so a click can still explain itself.
+    expect(r.getAttribute('aria-disabled')).toBe('true');
+    r.click();
+    key(window, '1');
+    expect(m.sent('buyTool')).toHaveLength(0);
+    const said = Array.from(m.root.querySelectorAll(`[data-testid="${TID.toast}"]`), (n) => n.textContent);
+    expect(said).toContain(`Maxed out: ${cap} is the cap`);
+    expect(said).not.toContain('Not enough tokens');
+  });
+
+  it('says it cannot afford a row it cannot afford', () => {
+    const m = mountUI({ run: makeRun({ tokens: 0 }) });
+    key(window, '1');
+    const said = Array.from(m.root.querySelectorAll(`[data-testid="${TID.toast}"]`), (n) => n.textContent);
+    expect(said).toContain('Not enough tokens');
   });
 
   it('marks a tool an incident has stalled', () => {
@@ -133,11 +150,12 @@ describe('the ×1 / ×10 / ×100 toggle', () => {
   });
 
   it('caps the batch at the headroom left under the tier cap, and says so', () => {
-    const m = mountUI({ run: makeRun({ tokens: 1e15, tools: { grep: 55 } as never }) });
+    const def = TOOL_BY_ID.grep;
+    const owned = def.maxOwned - 5;
+    const m = mountUI({ run: makeRun({ tokens: 1e15, tools: { grep: owned } as never }) });
     must(m.root, TID.buyQtyToggle).click();
     m.frame();
-    const def = TOOL_BY_ID.grep;
-    expect(must(m.root, tid(TID.toolCost, 'grep')).textContent).toBe(`${formatTokens(bulkToolCost(def, 55, 5, 1))} (5)`);
+    expect(must(m.root, tid(TID.toolCost, 'grep')).textContent).toBe(`${formatTokens(bulkToolCost(def, owned, 5, 1))} (5)`);
   });
 
   it('disables a batch the wallet cannot cover whole', () => {

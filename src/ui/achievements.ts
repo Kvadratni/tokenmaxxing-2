@@ -61,7 +61,7 @@ export class AchievementsScreen {
       cls: 'tm-btn',
       text: '← Back',
       parent: head,
-      tid: 'achv-back',
+      tid: TID.achievementsBack,
     });
     this.disposers.push(on(this.primary, 'click', () => this.ctx.setScreen('title')));
 

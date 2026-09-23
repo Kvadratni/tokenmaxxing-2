@@ -27,9 +27,25 @@ for (const name of assets) {
       `\n    <style>\n${body}\n    </style>`,
     );
   } else if (name.endsWith('.js')) {
+    // Vite copies public/ verbatim and never inlines it, so the sprite sheets
+    // are still referenced as `new URL("../sprites/x.png", import.meta.url)`.
+    // Once the module is inline, import.meta.url is the page itself, so that
+    // path points one level above dist-single/ and every sheet 404s. Fold them
+    // in as data URIs (the same trick pack.mjs uses).
+    const folded = body.replace(
+      /new URL\("\.\.\/sprites\/([\w.-]+)",\s*import\.meta\.url\)/g,
+      (whole, file) => {
+        const src = join(OUT, 'sprites', file);
+        if (!existsSync(src)) {
+          process.stdout.write(`WARNING: no ${src}, leaving reference as-is\n`);
+          return whole;
+        }
+        return `new URL(${JSON.stringify(`data:image/png;base64,${readFileSync(src).toString('base64')}`)})`;
+      },
+    );
     // The bundle can contain `</script>` inside string literals; split the tag
     // so the browser's parser cannot terminate the block early.
-    const safe = body.replace(/<\/script>/gi, '<\\/script>');
+    const safe = folded.replace(/<\/script>/gi, '<\\/script>');
     html = html.replace(
       new RegExp(`\\s*<script[^>]*src="[^"]*${name}"[^>]*></script>`, 'g'),
       `\n    <script type="module">\n${safe}\n    </script>`,
@@ -44,7 +60,7 @@ if (leftovers) {
   process.exit(1);
 }
 
-const single = join(OUT, 'tokenmaxxing.html');
+const single = join(OUT, 'tokenmaxxing-2.html');
 writeFileSync(single, html);
 rmSync(assetDir, { recursive: true, force: true });
 rmSync(htmlPath, { force: true });

@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BALANCE, promptAt } from '../../src/sim/content.ts';
 import { TID, tid } from '../../src/testids.ts';
-import { COACH_TIP_MS, COACH_TIPS } from '../../src/ui/coach.ts';
+import { COACH_TIP_MS, COACH_TIPS, placeTip, type TipRect } from '../../src/ui/coach.ts';
 import { makeMeta, makeRun, mountUI, must, q, unmountAll } from './ui.fake-sim.ts';
 
 beforeEach(() => {
@@ -81,5 +81,48 @@ describe('coach marks', () => {
     unmountAll();
     const m = mountUI({ run: makeRun({ phase: 'drafting', draftOffer: ['please', 'grandma', 'tip_200'] }) });
     expect(q(m.root, tid(TID.coachTip, 'generate'))).toBeNull();
+  });
+});
+
+describe('placing a tip', () => {
+  const rect = (left: number, top: number, width: number, height: number): TipRect => ({
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+  });
+  // A 1280x720 desktop at --px 2: the stage is 640x360 at (220, 150).
+  const stage = rect(220, 150, 640, 360);
+  const band = rect(stage.left, stage.bottom - 44, stage.width, 44); // 22 scene px
+  const agent = rect(508, 330, 64, 124);
+
+  it('puts the agent tip above the agent, pointing down', () => {
+    expect(COACH_TIPS.find((t) => t.id === 'generate')!.placement).toBe('above');
+    const p = placeTip(agent, 300, 40, 1280, 720, 'above', band);
+    expect(p.side).toBe('above');
+    expect(p.top + 40).toBeLessThanOrEqual(agent.top);
+  });
+
+  it('never lands on the prompt line along the bottom of the stage', () => {
+    // Below the agent is exactly where the canvas prints the prompt.
+    const p = placeTip(agent, 300, 40, 1280, 720, 'below', band);
+    const hitsBand = p.top < band.bottom && p.top + 40 > band.top && p.left < band.right && p.left + 300 > band.left;
+    expect(hitsBand).toBe(false);
+  });
+
+  it('goes to the side when there is no room above', () => {
+    const high = rect(508, 20, 64, 124);
+    const p = placeTip(high, 200, 60, 1280, 720, 'above', band);
+    expect(p.side).toBe('right');
+    expect(p.left).toBeGreaterThanOrEqual(high.right);
+  });
+
+  it('stays inside the viewport', () => {
+    const edge = rect(1200, 300, 60, 40);
+    const p = placeTip(edge, 300, 40, 1280, 720, 'below', null);
+    expect(p.left + 300).toBeLessThanOrEqual(1280 - 10);
+    expect(p.left).toBeGreaterThanOrEqual(10);
   });
 });

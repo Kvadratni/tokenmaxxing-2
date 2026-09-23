@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * Ad-hoc entry point for the balance simulator.
+ * Entry point for the balance simulator.
  *
- * `npm run balance` writes the report from tests/unit/balance.report.test.ts;
- * this script is for deeper, slower sweeps while tuning:
+ *   node tools/balance/run-balance.mjs report          write artifacts/balance/report.md
+ *   node tools/balance/run-balance.mjs sweep 200       per-state table, 200 seeds
+ *   node tools/balance/run-balance.mjs nodes 96        Training node weights
  *
- *   node tools/balance/run-balance.mjs curve 400
- *   node tools/balance/run-balance.mjs cards 60
- *
- * It shells out to the vite-node bundled with vitest so the TypeScript sources
- * and the `@sim` alias resolve exactly as they do in the test run.
+ * See cli.ts for every mode. It shells out to the vite-node bundled with
+ * vitest so the TypeScript sources and the `@sim` alias resolve exactly as
+ * they do in the test run.
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { MAX_DPR, computeScale } from '../../src/render/canvas.ts';
+import { FRACTIONAL_MIN_DPR, MAX_DPR, computeScale } from '../../src/render/canvas.ts';
 import { createRenderer } from '../../src/render/index.ts';
 import { AGENT_RECT } from '../../src/render/atlas-types.ts';
 import { SCENE_HEIGHT, SCENE_WIDTH } from '../../src/sim/types.ts';
@@ -9,7 +9,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('computeScale — integer scaling', () => {
+describe('computeScale: integer below 2x DPR, the exact fit at 2x and up', () => {
   interface Row {
     readonly name: string;
     readonly w: number;
@@ -28,31 +28,35 @@ describe('computeScale — integer scaling', () => {
     { name: 'height bound', w: 1920, h: 400, dpr: 1, scale: 2, backingW: 640, backingH: 360 },
     { name: 'ultrawide', w: 3440, h: 1440, dpr: 1, scale: 8, backingW: 2560, backingH: 1440 },
     { name: 'super ultrawide', w: 5120, h: 1440, dpr: 2, scale: 8, backingW: 5120, backingH: 2880 },
-    { name: 'off-grid 1000x1000', w: 1000, h: 1000, dpr: 2, scale: 3, backingW: 1920, backingH: 1080 },
+    { name: 'off-grid 1000x1000 @1x', w: 1000, h: 1000, dpr: 1, scale: 3, backingW: 960, backingH: 540 },
+    { name: 'off-grid 1000x1000 @1.5x', w: 1000, h: 1000, dpr: 1.5, scale: 3, backingW: 1440, backingH: 810 },
+    // At 2x the fit is exact: 1000 / 320 = 3.125, filling the box's width.
+    { name: 'off-grid 1000x1000 @2x', w: 1000, h: 1000, dpr: 2, scale: 3.125, backingW: 2000, backingH: 1125 },
     // Sub-scene sizes must clamp to 1, never 0.
     { name: 'sub-320 width', w: 200, h: 400, dpr: 1, scale: 1, backingW: 320, backingH: 180 },
     { name: 'sub-180 height', w: 900, h: 100, dpr: 1, scale: 1, backingW: 320, backingH: 180 },
     { name: 'tiny', w: 1, h: 1, dpr: 1, scale: 1, backingW: 320, backingH: 180 },
     { name: 'zero', w: 0, h: 0, dpr: 1, scale: 1, backingW: 320, backingH: 180 },
-    { name: 'phone portrait', w: 390, h: 844, dpr: 3, scale: 1, backingW: 960, backingH: 540 },
+    { name: 'phone portrait @3x', w: 390, h: 844, dpr: 3, scale: 1.21875, backingW: 1170, backingH: 658 },
+    { name: 'phone portrait @1x', w: 390, h: 844, dpr: 1, scale: 1, backingW: 320, backingH: 180 },
   ];
 
   for (const row of table) {
     it(`${row.name}: ${row.w}x${row.h} @${row.dpr}x -> scale ${row.scale}`, () => {
       const r = computeScale(row.w, row.h, row.dpr);
       expect(r.scale).toBe(row.scale);
-      expect(r.cssW).toBe(SCENE_WIDTH * row.scale);
-      expect(r.cssH).toBe(SCENE_HEIGHT * row.scale);
+      expect(r.cssW).toBeCloseTo(SCENE_WIDTH * row.scale, 3);
+      expect(r.cssH).toBeCloseTo(SCENE_HEIGHT * row.scale, 3);
       expect(r.backingW).toBe(row.backingW);
       expect(r.backingH).toBe(row.backingH);
-      expect(r.pixelScale).toBe(row.scale * Math.min(MAX_DPR, row.dpr));
+      expect(r.pixelScale).toBeCloseTo(row.scale * Math.min(MAX_DPR, row.dpr), 9);
     });
   }
 
-  it('never produces a fractional or zero scale', () => {
+  it('never produces a fractional or zero scale below 2x DPR', () => {
     for (let w = 0; w <= 4000; w += 17) {
       for (let h = 0; h <= 2200; h += 23) {
-        const r = computeScale(w, h, 1);
+        const r = computeScale(w, h, 1.5);
         expect(Number.isInteger(r.scale)).toBe(true);
         expect(r.scale).toBeGreaterThanOrEqual(1);
       }
@@ -82,14 +86,53 @@ describe('computeScale — integer scaling', () => {
 describe('resize applies the computed geometry to the element', () => {
   it('sets backing store and CSS size independently', () => {
     const { canvas } = makeCanvas();
-    const r = createRenderer(canvas, { measure: () => ({ w: 1000, h: 1000 }), dpr: () => 2, sheetTimeoutMs: 5, });
-    expect(canvas.width).toBe(1920);
-    expect(canvas.height).toBe(1080);
+    const r = createRenderer(canvas, { measure: () => ({ w: 1000, h: 1000 }), dpr: () => 1.5, sheetTimeoutMs: 5 });
+    expect(canvas.width).toBe(1440);
+    expect(canvas.height).toBe(810);
     expect(canvas.style.width).toBe('960px');
     expect(canvas.style.height).toBe('540px');
     expect(canvas.style.imageRendering).toBe('pixelated');
     expect(r.metrics().scale).toBe(3);
     r.destroy();
+  });
+
+  it('at 2x DPR with a fractional fit, fills the stage box exactly', () => {
+    // The UI's stage box at --px 2.7 (src/ui/scale.ts goes fractional at 2x).
+    const px = 2.7;
+    const box = { w: 320 * px, h: 180 * px };
+    const { canvas } = makeCanvas({ left: 40, top: 30 });
+    const r = createRenderer(canvas, { measure: () => box, dpr: () => 2, sheetTimeoutMs: 5 });
+    expect(r.metrics().scale).toBeCloseTo(px, 9);
+    expect(canvas.style.width).toBe('864px');
+    expect(canvas.style.height).toBe('486px');
+    // Backing store: round(320 * scale * dpr), full device resolution.
+    expect(canvas.width).toBe(Math.round(320 * px * 2));
+    expect(canvas.height).toBe(Math.round(180 * px * 2));
+    // No gutter: the box's corners are the scene's corners...
+    expect(r.toScene(40, 30)).toEqual({ x: 0, y: 0 });
+    const far = r.toScene(40 + box.w, 30 + box.h);
+    expect(far.x).toBeCloseTo(320, 6);
+    expect(far.y).toBeCloseTo(180, 6);
+    // ...so a hit box placed in --px units from the box's top-left is over the agent.
+    const cx = AGENT_RECT.x + AGENT_RECT.w / 2;
+    const cy = AGENT_RECT.y + AGENT_RECT.h / 2;
+    const p = r.toScene(40 + cx * px, 30 + cy * px);
+    expect(p.x).toBeCloseTo(cx, 6);
+    expect(p.y).toBeCloseTo(cy, 6);
+    expect(r.hitsAgent(p.x, p.y)).toBe(true);
+    r.destroy();
+  });
+
+  it('keeps whole-number scales at 2x DPR when the fit is whole', () => {
+    const r = computeScale(1280, 720, FRACTIONAL_MIN_DPR);
+    expect(r.scale).toBe(4);
+    expect([r.backingW, r.backingH]).toEqual([2560, 1440]);
+    expect([r.cssW, r.cssH]).toEqual([1280, 720]);
+  });
+
+  it('never goes below 1x, even at 2x DPR in a tiny box', () => {
+    expect(computeScale(200, 100, 2).scale).toBe(1);
+    expect(computeScale(Infinity, Infinity, 2).scale).toBe(1);
   });
 
   it('re-fits when the host changes size', () => {

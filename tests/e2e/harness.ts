@@ -1,74 +1,172 @@
 /**
- * Shared e2e harness.
+ * Shared e2e harness for Tokenmaxxing 2.
  *
  * Every spec drives the game through two surfaces and nothing else:
  *   - `TID` selectors from `src/testids.ts` (the frozen contract), and
- *   - `window.__TOKENMAXXING__` (the `TestHooks` interface).
+ *   - `window.__TOKENMAXXING2__` (TestHooks v2, live with `?testhooks=1`).
  *
- * No CSS-class selectors, no text matching on strings the UI owns.
+ * No CSS-class selectors. Numbers the BALANCE pass tunes (requirements,
+ * patience, costs, penalties) are read out of `snapshot().derived` at run time
+ * rather than typed into a spec, so a retune cannot break the suite.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import { TID, tid } from '../../src/testids.ts';
 import type { DerivedStats, MetaState, RunState } from '../../src/sim/types.ts';
+import { AGENT_RECT } from '../../src/render/atlas-types.ts';
 
 export { TID, tid };
 
+/** The game 2 save key, and the game 1 key the sequel imports from. */
+export const SAVE_KEY = 'tokenmaxxing2.save.v1';
+export const LEGACY_KEY = 'tokenmaxxing.save.v1';
+
+/** Every spec's default run seed. Any fixed value works; this one is just ours. */
+export const SEED = 0x7a11;
+
 /**
- * `TestHooks.snapshot()` is declared `unknown` and travels through
- * `JSON.parse(JSON.stringify(...))`, so non-finite numbers arrive as `null`.
- * That is deliberate: a `null` here is itself a finding.
+ * `TestHooks.snapshot()` travels through `JSON.parse(JSON.stringify(...))`, so
+ * non-finite numbers arrive as `null`. That is deliberate: a `null` where a
+ * number belongs is itself a finding.
  */
 export interface Snap {
   run: RunState;
   meta: MetaState;
   derived: DerivedStats;
-  screen: string;
+  screen: 'title' | 'run' | 'meta' | 'achievements';
 }
 
 /** Errors the page produced. Asserted empty by every spec that boots. */
 export interface Watcher {
   readonly errors: string[];
+  /** Responses with a 4xx/5xx status, and requests that failed outright. */
+  readonly badResponses: string[];
 }
 
-/** CSS attribute selector for a testid, for the rare case a Locator is wrong. */
+/** CSS attribute selector for a testid, for page-side `querySelector` code. */
 export function sel(id: string): string {
   return `[data-testid="${id}"]`;
 }
 
-/** Attach console-error / pageerror capture. Must run before `goto`. */
+/** Locator for every testid that starts with `${prefix}-`. */
+export function byPrefix(page: Page | Locator, prefix: string): Locator {
+  return page.locator(`[data-testid^="${prefix}-"]`);
+}
+
+/** Attach console-error / pageerror / bad-response capture. Must run before `goto`. */
 export function watch(page: Page): Watcher {
   const errors: string[] = [];
+  const badResponses: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') errors.push(`console.error: ${msg.text()}`);
   });
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.name}: ${err.message}`);
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.name}: ${err.message}`));
+  page.on('response', (r) => {
+    if (r.status() >= 400) badResponses.push(`${r.status()} ${r.url()}`);
   });
-  return { errors };
+  page.on('requestfailed', (r) => {
+    // A navigation away (reload) aborts in-flight requests; that is not a bug.
+    const why = r.failure()?.errorText ?? '';
+    if (!/ERR_ABORTED/.test(why)) badResponses.push(`failed ${r.url()} ${why}`);
+  });
+  return { errors, badResponses };
+}
+
+export function expectClean(w: Watcher): void {
+  expect(w.errors, w.errors.join('\n')).toEqual([]);
+}
+
+export interface BootOpts {
+  /** Load with `?testhooks=1`. Default true. Without it there is no hook API. */
+  hooks?: boolean;
+  /** Raw text for the game 2 save, written before the first load. */
+  save?: string;
+  /** Raw text for a Tokenmaxxing 1 save on the same origin. */
+  legacySave?: string;
+  /**
+   * First-run coach marks pop up over the controls on state changes. By
+   * default the harness retires each one the moment it appears; the coach spec
+   * opts out to test them.
+   */
+  keepCoach?: boolean;
 }
 
 /**
- * Boot the production preview with test hooks on and a hermetic save.
+ * Boot the production preview with a hermetic save.
  *
- * localStorage is cleared exactly once per page session (guarded through
- * sessionStorage) so a deliberate `page.reload()` in the persistence spec still
- * sees the save it just wrote.
+ * localStorage is cleared (and optionally seeded) exactly once per page
+ * session, guarded through sessionStorage, so a deliberate `page.reload()` in
+ * a persistence spec still sees the save it just wrote.
  */
-export async function bootPage(page: Page): Promise<Watcher> {
+export async function bootPage(page: Page, opts: BootOpts = {}): Promise<Watcher> {
   const w = watch(page);
-  await page.addInitScript(() => {
-    try {
-      if (sessionStorage.getItem('tm-e2e-cleared') !== '1') {
-        localStorage.clear();
-        sessionStorage.setItem('tm-e2e-cleared', '1');
+  await page.addInitScript(
+    ({ save, legacy, saveKey, legacyKey }) => {
+      try {
+        if (sessionStorage.getItem('tm2-e2e-booted') !== '1') {
+          localStorage.clear();
+          if (save !== null) localStorage.setItem(saveKey, save);
+          if (legacy !== null) localStorage.setItem(legacyKey, legacy);
+          sessionStorage.setItem('tm2-e2e-booted', '1');
+        }
+      } catch {
+        /* storage unavailable: nothing to clear */
       }
-    } catch {
-      /* storage unavailable — nothing to clear */
-    }
-  });
-  await page.goto('/?testhooks=1');
-  await page.waitForFunction(() => Boolean(window.__TOKENMAXXING__));
+    },
+    {
+      save: opts.save ?? null,
+      legacy: opts.legacySave ?? null,
+      saveKey: SAVE_KEY,
+      legacyKey: LEGACY_KEY,
+    },
+  );
+  if (!opts.keepCoach) await retireCoachMarks(page);
+  const hooks = opts.hooks !== false;
+  await page.goto(hooks ? '/?testhooks=1' : '/');
+  if (hooks) await page.waitForFunction(() => Boolean(window.__TOKENMAXXING2__));
+  await expect(page.getByTestId(TID.titleScreen)).toBeVisible();
   return w;
+}
+
+/**
+ * Coach marks are real overlays (pointer-events: auto) pinned beside the
+ * controls they explain, and they appear whenever their state first becomes
+ * true. Dismiss them as soon as Playwright sees one, before any action.
+ * `dispatchEvent`, not `click`: a tip can sit under a dialog's backdrop.
+ */
+async function retireCoachMarks(page: Page): Promise<void> {
+  await page.addLocatorHandler(
+    byPrefix(page, TID.coachTip).first(),
+    async (tip) => {
+      await byPrefix(tip, TID.coachDismiss).first().dispatchEvent('click');
+    },
+    { noWaitAfter: true },
+  );
+}
+
+/**
+ * Retire any coach tip on screen right now. For raw `page.mouse` / touchscreen
+ * input, which bypasses the locator handler above.
+ */
+export async function dismissCoach(page: Page): Promise<void> {
+  await page.evaluate((prefix) => {
+    for (const b of document.querySelectorAll<HTMLElement>(`[data-testid^="${prefix}-"]`)) b.click();
+  }, TID.coachDismiss);
+  await frames(page, 1);
+}
+
+/**
+ * Retire tips until none is left to show for the current state. Each dismissal
+ * lets the next eligible tip in on the following frame, so one pass is not
+ * enough before a raw keyboard walk or touch sequence.
+ */
+export async function drainCoach(page: Page): Promise<void> {
+  const tips = byPrefix(page, TID.coachTip);
+  let quiet = 0;
+  for (let i = 0; i < 20 && quiet < 2; i++) {
+    await dismissCoach(page);
+    await frames(page, 2);
+    quiet = (await tips.count()) === 0 ? quiet + 1 : 0;
+  }
 }
 
 /** Wait for `n` animation frames so the HUD has re-rendered. */
@@ -82,131 +180,249 @@ export async function frames(page: Page, n = 2): Promise<void> {
 
 /** Live sim snapshot. */
 export async function snap(page: Page): Promise<Snap> {
-  return (await page.evaluate(() => window.__TOKENMAXXING__!.snapshot())) as Snap;
+  return (await page.evaluate(() => window.__TOKENMAXXING2__!.snapshot())) as Snap;
 }
 
 /** Fast-forward the sim, then let the UI catch up. */
 export async function advance(page: Page, ms: number): Promise<void> {
-  await page.evaluate((n) => window.__TOKENMAXXING__!.advance(n), ms);
+  await page.evaluate((n) => window.__TOKENMAXXING2__!.advance(n), ms);
   await frames(page, 2);
 }
 
+/**
+ * Advance in `step` slices until `pred` holds on a snapshot. Used wherever the
+ * wait is a tuned duration (the report beat, an incident's timer) that the
+ * spec should not have to know.
+ */
+export async function advanceUntil(
+  page: Page,
+  pred: (s: Snap) => boolean,
+  opts: { step?: number; maxMs?: number; what?: string } = {},
+): Promise<Snap> {
+  const step = opts.step ?? 100;
+  const maxMs = opts.maxMs ?? 60_000;
+  let s = await snap(page);
+  let spent = 0;
+  while (!pred(s)) {
+    if (spent >= maxMs) {
+      throw new Error(`advanceUntil: ${opts.what ?? 'condition'} not met after ${maxMs}ms of sim time`);
+    }
+    await page.evaluate((n) => window.__TOKENMAXXING2__!.advance(n), step);
+    spent += step;
+    s = await snap(page);
+  }
+  await frames(page, 2);
+  return s;
+}
+
 export async function grant(page: Page, amount: number): Promise<void> {
-  await page.evaluate((n) => window.__TOKENMAXXING__!.grant(n), amount);
+  await page.evaluate((n) => window.__TOKENMAXXING2__!.grant(n), amount);
+  await frames(page, 2);
+}
+
+export async function grantThumbs(page: Page, n: number): Promise<void> {
+  await page.evaluate((k) => window.__TOKENMAXXING2__!.grantThumbs(k), n);
   await frames(page, 2);
 }
 
 export async function setTimeScale(page: Page, k: number): Promise<void> {
-  await page.evaluate((n) => window.__TOKENMAXXING__!.setTimeScale(n), k);
-}
-
-export async function clickLaptopHook(page: Page, n: number): Promise<void> {
-  await page.evaluate((count) => window.__TOKENMAXXING__!.clickLaptop(count), n);
-  await frames(page, 2);
+  await page.evaluate((n) => window.__TOKENMAXXING2__!.setTimeScale(n), k);
 }
 
 export async function forceIncident(page: Page, id: string): Promise<void> {
-  await page.evaluate((incident) => window.__TOKENMAXXING__!.forceIncident(incident), id);
+  await page.evaluate((incident) => window.__TOKENMAXXING2__!.forceIncident(incident), id);
+  await frames(page, 2);
+}
+
+export async function forcePickup(page: Page, id: string, x?: number, y?: number): Promise<void> {
+  await page.evaluate(
+    ([p, px, py]) => window.__TOKENMAXXING2__!.forcePickup(p as string, px as number | undefined, py as number | undefined),
+    [id, x, y] as const,
+  );
   await frames(page, 2);
 }
 
 export async function forceDraft(page: Page, ids: string[]): Promise<void> {
-  await page.evaluate((cards) => window.__TOKENMAXXING__!.forceDraft(cards), ids);
+  await page.evaluate((cards) => window.__TOKENMAXXING2__!.forceDraft(cards), ids);
+  await frames(page, 2);
+}
+
+export async function setContext(page: Page, fill: number): Promise<void> {
+  await page.evaluate((f) => window.__TOKENMAXXING2__!.setContext(f), fill);
+  await frames(page, 2);
+}
+
+export async function setPatience(page: Page, fill: number): Promise<void> {
+  await page.evaluate((f) => window.__TOKENMAXXING2__!.setPatience(f), fill);
+  await frames(page, 2);
+}
+
+export async function forceVerify(page: Page, outcome: 'pass' | 'catch' | null): Promise<void> {
+  await page.evaluate((o) => window.__TOKENMAXXING2__!.forceVerify(o), outcome);
+}
+
+export async function importLegacy(page: Page, raw: string): Promise<void> {
+  await page.evaluate((r) => window.__TOKENMAXXING2__!.importLegacy(r), raw);
+  await frames(page, 2);
+}
+
+export async function clickAgentHook(page: Page, n: number): Promise<void> {
+  await page.evaluate((count) => window.__TOKENMAXXING2__!.clickAgent(count), n);
   await frames(page, 2);
 }
 
 export async function resetSave(page: Page): Promise<void> {
-  await page.evaluate(() => window.__TOKENMAXXING__!.resetSave());
-}
-
-export async function renderStats(page: Page): Promise<{
-  fps: number;
-  particles: number;
-  sprites: number;
-  missingSprites: string[];
-}> {
-  return page.evaluate(() => window.__TOKENMAXXING__!.renderStats());
+  await page.evaluate(() => window.__TOKENMAXXING2__!.resetSave());
 }
 
 /**
- * Leave the title screen and restart the sim on a fixed seed with real time
+ * Leave the title screen for a fresh run on a fixed seed with real time
  * frozen, so every later `advance()` is the only source of elapsed time.
  */
-export async function startRun(page: Page, seed = 0x7a11): Promise<void> {
+export async function startRun(page: Page, seed = SEED): Promise<Snap> {
+  await setTimeScale(page, 0);
   await page.getByTestId(TID.startRun).click();
-  await page.evaluate((s) => {
-    const h = window.__TOKENMAXXING__!;
-    h.setTimeScale(0);
-    h.startRun(s);
-  }, seed);
+  await page.evaluate((s) => window.__TOKENMAXXING2__!.startRun(s), seed);
   await frames(page, 3);
-  await expect(page.getByTestId(TID.shipButton)).toBeVisible();
+  await expect(page.getByTestId(TID.reportButton)).toBeVisible();
+  const s = await snap(page);
+  expect(s.screen).toBe('run');
+  expect(s.run.phase).toBe('running');
+  return s;
 }
 
 /**
- * A real pointer click on the laptop art.
+ * A real pointer click on the agent.
  *
- * `LAPTOP_RECT` is `{x:128, y:96, w:64, h:44}` in the 320x180 scene and the hit
- * surface is `inset: 0` over a stage that is exactly 320:180, so the centre of
- * the rect is at (0.5, 0.6556) of the element box.
+ * `agent-hit` is laid over the renderer's AGENT_RECT and a pointer-down on it
+ * goes through `renderer.toScene()` + `hitsAgent()`, so this exercises the
+ * whole coordinate chain, not just a DOM listener.
  */
-export async function clickLaptop(page: Page, times = 1): Promise<void> {
-  const laptop = page.getByTestId(TID.laptop);
-  const box = await laptop.boundingBox();
-  expect(box, 'laptop hit area must have a box').not.toBeNull();
-  const pos = { x: box!.width * 0.5, y: box!.height * 0.6556 };
-  for (let i = 0; i < times; i++) {
-    await laptop.click({ position: pos });
-  }
+export async function clickAgent(page: Page, times = 1): Promise<void> {
+  const agent = page.getByTestId(TID.agent);
+  for (let i = 0; i < times; i++) await agent.click();
   await frames(page, 2);
 }
 
-/** Locator for an agent shop row. */
-export function agentRow(page: Page, id: string): Locator {
-  return page.getByTestId(tid(TID.agentRow, id));
+/** Client coordinates of a point in the 320x180 scene. */
+export async function sceneToClient(page: Page, x: number, y: number): Promise<{ x: number; y: number }> {
+  const box = await page.getByTestId(TID.scene).boundingBox();
+  expect(box, 'the scene canvas has no box').not.toBeNull();
+  return { x: box!.x + (x / 320) * box!.width, y: box!.y + (y / 180) * box!.height };
 }
 
-/** All draft cards currently offered. */
+export function toolRow(page: Page, id: string): Locator {
+  return page.getByTestId(tid(TID.toolRow, id));
+}
+
 export function draftCards(page: Page): Locator {
-  return page.locator(`[data-testid^="${TID.draftCard}-"]`);
+  return byPrefix(page, TID.draftCard);
 }
 
-/**
- * Ship the current project and take the first offered card, leaving the run on
- * the next project in `running` phase. Returns the number of ms advanced.
- */
-export async function shipAndDraft(page: Page): Promise<void> {
-  const before = await snap(page);
-  const need = before.derived.requirement - before.run.slop;
-  if (need > 0) await grant(page, need + 1);
+export function activeCards(page: Page): Locator {
+  return byPrefix(page.getByTestId(TID.activeCards), TID.activeCard);
+}
 
-  const shipBtn = page.getByTestId(TID.shipButton);
-  await expect(shipBtn).toBeEnabled();
-  await shipBtn.click();
+/** Top up the wallet to exactly the requirement (or leave it if already there). */
+export async function fundReport(page: Page): Promise<Snap> {
+  const s = await snap(page);
+  const need = s.derived.requirement - s.run.tokens;
+  if (need > 0) await grant(page, need);
+  const after = await snap(page);
+  expect(after.derived.reportState).toBe('report');
+  return after;
+}
 
-  // 900ms celebration beat, then the draft opens on the next frame.
-  await advance(page, 1200);
+/** Report done through the real button, then wait out the celebration beat. */
+export async function reportAndOpenDraft(page: Page): Promise<Snap> {
+  await fundReport(page);
+  const button = page.getByTestId(TID.reportButton);
+  await expect(button).toHaveAttribute('data-state', 'report');
+  await button.click();
+  const s = await advanceUntil(page, (x) => x.run.phase === 'drafting', { what: 'the draft to open' });
   await expect(page.getByTestId(TID.draftModal)).toBeVisible();
-  await takeCard(page);
+  return s;
 }
 
 /**
- * Complete an open draft. Picking is two-step by design — clicking a card only
- * highlights it, and Confirm commits — so every caller goes through here rather
- * than assuming a click is a purchase.
+ * Complete an open draft. Picking is two-step by design (a click highlights,
+ * Confirm commits), so every caller goes through here.
  */
-export async function takeCard(page: Page, id?: string): Promise<void> {
+export async function takeCard(page: Page, id?: string): Promise<string> {
   const card = id ? page.getByTestId(tid(TID.draftCard, id)) : draftCards(page).first();
+  const testid = (await card.getAttribute('data-testid')) ?? '';
   await card.click();
   const confirm = page.getByTestId(TID.draftConfirm);
   await expect(confirm).toBeEnabled();
   await confirm.click();
-  await frames(page, 3);
   await expect(page.getByTestId(TID.draftModal)).toBeHidden();
+  await frames(page, 2);
+  return testid.slice(TID.draftCard.length + 1);
 }
 
-/** Rendered width of the ship-bar fill, in CSS pixels. */
-export async function shipFillWidth(page: Page): Promise<number> {
-  const box = await page.getByTestId(TID.shipBarFill).boundingBox();
-  return box ? box.width : -1;
+/** Report, draft the first (or named) card, and land on the next prompt. */
+export async function reportAndTake(page: Page, id?: string): Promise<string> {
+  await reportAndOpenDraft(page);
+  return takeCard(page, id);
+}
+
+/** Hold these cards by drafting them through forced offers. Each pick advances the prompt. */
+export async function holdCards(page: Page, ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await forceDraft(page, [id]);
+    await expect(page.getByTestId(TID.draftModal)).toBeVisible();
+    await takeCard(page, id);
+  }
+}
+
+/** Lose the run on the human's patience, and go through run over to Training. */
+export async function loseRunToTraining(page: Page): Promise<void> {
+  await setPatience(page, 0);
+  await expect(page.getByTestId(TID.runOverModal)).toBeVisible();
+  await page.getByTestId(TID.runOverContinue).click();
+  await expect(page.getByTestId(TID.metaScreen)).toBeVisible();
+}
+
+/** The active element's testid (or tag name), for focus assertions. */
+export async function focused(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const a = document.activeElement;
+    return a?.getAttribute('data-testid') ?? a?.tagName ?? 'null';
+  });
+}
+
+/** Horizontal overflow of the layout viewport, in CSS px (0 when none). */
+export async function hOverflow(page: Page): Promise<number> {
+  return page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Where the canvas actually draws the agent's hit box, in client px. */
+export async function drawnAgent(page: Page): Promise<Box> {
+  const c = (await page.getByTestId(TID.scene).boundingBox())!;
+  const s = c.width / 320;
+  return { x: c.x + AGENT_RECT.x * s, y: c.y + AGENT_RECT.y * s, w: AGENT_RECT.w * s, h: AGENT_RECT.h * s };
+}
+
+export async function agentHit(page: Page): Promise<Box> {
+  const b = (await page.getByTestId(TID.agent).boundingBox())!;
+  return { x: b.x, y: b.y, w: b.width, h: b.height };
+}
+
+export async function expectAgentAligned(page: Page): Promise<void> {
+  const drawn = await drawnAgent(page);
+  const hit = await agentHit(page);
+  const msg = `agent-hit ${JSON.stringify(hit)} vs the agent the canvas draws ${JSON.stringify(drawn)}`;
+  expect(Math.abs(hit.x - drawn.x), msg).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(hit.y - drawn.y), msg).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(hit.w - drawn.w), msg).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(hit.h - drawn.h), msg).toBeLessThanOrEqual(1.5);
 }

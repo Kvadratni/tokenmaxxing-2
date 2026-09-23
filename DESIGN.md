@@ -29,7 +29,7 @@ in the **Training** tree.
 | | Name | Scope | Earned | Spent on |
 |---|---|---|---|---|
 | Run | **Tokens** | this session | clicks, tools, pickups | tools, upgrades. Report Done spends the requirement |
-| Meta | **👍 Thumbs-up** | forever | one per prompt reported, plus bonuses; banked at run end with a live tally | the Training tree |
+| Meta | **👍 Thumbs-up** | forever | two per prompt reported, plus bonuses; banked at run end with a live tally | the Training tree |
 
 Tokens reuse the first game's rule that **your wallet is the progress bar**.
 Buying anything drops you further from reporting done.
@@ -46,8 +46,9 @@ Buying anything drops you further from reporting done.
   push it around:
   - **"You're absolutely right!"** is a button, hotkey `Y`. It restores patience
     with sharply diminishing returns: each press is worth half the last, and the
-    penalty cools off over about 8 s. Every press also costs context, because
-    sycophancy is tokens too.
+    penalty cools off slowly (one press every 32 s). Every press also costs
+    context, because sycophancy is tokens too. Spamming it restores at most about
+    two-thirds of the drain, so the bar always empties eventually.
   - It is hurt by forced compaction (−15%), by getting caught lying (−40%), and
     by some incidents.
   - It is helped by some cards, pickups and good incidents ("The human went to
@@ -98,7 +99,7 @@ Buying anything drops you further from reporting done.
   - +15% per time you've been caught;
   - reduced by upgrades, cards and Training;
   - clamped to 5–95%.
-- **Not verified:** the prompt counts as done, you earn +1 👍 (no time bonus),
+- **Not verified:** the prompt counts as done, you earn the base 👍 (no time bonus),
   and you gain **+1 tech debt**. Each point of tech debt raises the incident
   rate 10% for the rest of the run.
 - **Caught:** "The human ran the tests." The tokens are gone, patience drops
@@ -107,7 +108,8 @@ Buying anything drops you further from reporting done.
 ## Tools (the agent ladder)
 
 Ten tiers, each with a cost curve, a rate, a per-tier cap and a **context
-footprint**. Tiers 1–4 are available from run 1, and 5–10 are unlocked in
+footprint**. Each tier costs about 15× the last, the same step as a prompt's
+requirement, so a new tier arrives roughly once per prompt. Tiers 1–4 are available from run 1, and 5–10 are unlocked in
 Training. As in game 1, a tier is revealed once you own a few of the previous
 one.
 
@@ -178,12 +180,12 @@ graveyard.
 
 ## Achievements
 
-24 in total. The 12 visible ones are the steady goals: first report, first
+25 in total. The 12 visible ones are the steady goals: first report, first
 compaction, a run with no forced compaction, win a run, win three runs, 100
 "absolutely right"s, unlock 1M context, hold 1T tokens, own 25 subagents, an
 honest win, ten runs, and reporting with more than 90% patience left.
 
-The 12 hidden ones are for players to find. They are listed in
+The 13 hidden ones are for players to find. They are listed in
 `src/sim/achievements.ts` and deliberately **not** documented in the README.
 
 ## The cross-game hook

@@ -367,9 +367,9 @@ describe('the sim and its save', () => {
 
   it('metaNextCost walks the cost ladder and is Infinity when maxed or unknown', () => {
     const m = defaultMeta();
-    expect(metaNextCost(m, 'tool_use')).toBe(2);
+    expect(metaNextCost(m, 'tool_use')).toBe(1);
     m.levels['tool_use'] = 5;
-    expect(metaNextCost(m, 'tool_use')).toBe(21);
+    expect(metaNextCost(m, 'tool_use')).toBe(13);
     m.levels['tool_use'] = 6;
     expect(metaNextCost(m, 'tool_use')).toBe(Number.POSITIVE_INFINITY);
     expect(metaNextCost(m, 'nope')).toBe(Number.POSITIVE_INFINITY);

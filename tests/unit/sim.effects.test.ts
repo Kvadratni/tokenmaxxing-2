@@ -123,10 +123,10 @@ describe('sources in a run', () => {
   it('fold upgrades, cards, incidents (buffs too) and Training', () => {
     const s = createSim({ seed: 1, storage: null, persist: false, meta: metaWith({ tool_use: 1 }) });
     s.run.owned.push('parallel_tool_calls'); // idle x1.5
-    s.run.cards.push('tip_200'); // idle x1.3
+    s.run.cards.push('tip_200'); // idle x1.15
     s.run.incidents.push({ id: 'pk_docs', remainingMs: 1000, clicksRemaining: 0, startedAtMs: 0 }); // idle x2
-    expect(liveAggregate(s.run, s.meta).idleMult).toBeCloseTo(1.1 * 1.5 * 1.3 * 2, 10);
-    expect(baseAggregate(s.run, s.meta).idleMult).toBeCloseTo(1.1 * 1.5 * 1.3, 10);
+    expect(liveAggregate(s.run, s.meta).idleMult).toBeCloseTo(1.1 * 1.5 * 1.15 * 2, 10);
+    expect(baseAggregate(s.run, s.meta).idleMult).toBeCloseTo(1.1 * 1.5 * 1.15, 10);
     expect(effectSources(s.run, s.meta, false)).toHaveLength(effectSources(s.run, s.meta, true).length - 1);
   });
 

@@ -87,7 +87,9 @@ export function createUI(opts: UIOpts): UI {
   const ui = el('div', { cls: 'tm-ui', parent: root });
   installIconSheet(ui);
   void installPixelFont(root.ownerDocument).then((ok) => {
-    if (ok && !destroyed) ui.setAttribute('data-pixel-font', '');
+    if (!ok || destroyed) return;
+    ui.setAttribute('data-pixel-font', '');
+    syncTopbarHeight();
   });
 
   let screen: UIScreen = opts.screen ?? 'title';
@@ -130,7 +132,7 @@ export function createUI(opts: UIOpts): UI {
   const helpBtn = btn({ cls: 'tm-btn tm-btn--quiet', tid: TID.helpButton, text: '?', parent: topbar, label: 'How to play' });
   const aboutBtn = btn({
     cls: 'tm-btn tm-btn--quiet',
-    tid: 'topbar-about',
+    tid: TID.topbarAbout,
     text: 'About',
     parent: topbar,
     label: 'About this game and credits',
@@ -275,8 +277,14 @@ export function createUI(opts: UIOpts): UI {
   // ---- scale -----------------------------------------------------------------
   // The same callback decides the drawer: both fall out of the viewport, and one
   // place reacts to a resize or a rotation.
+  /** Screens float under the top bar; tell them how tall it came out. */
+  const syncTopbarHeight = (): void => {
+    const h = topbar.offsetTop + topbar.offsetHeight;
+    if (h > 0) ui.style.setProperty('--topbar-h', `${h}px`);
+  };
   const scaleCtl = createScale(ui, (s) => {
     setShopMode(s.shop);
+    syncTopbarHeight();
     emit({ t: 'scale', px: s.px });
   });
 

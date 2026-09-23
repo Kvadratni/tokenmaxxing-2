@@ -55,6 +55,7 @@ interface ToolRow {
   lock: Txt;
   cost: Txt;
   dis: Dis;
+  maxed: Attr;
   locked: Flag;
   capped: Flag;
   halted: Flag;
@@ -200,14 +201,7 @@ export class Shop {
   buyVisibleIndex(index: number): void {
     const def = this.visible[index];
     if (def === undefined) return;
-    const row = this.toolRows.rows.get(def.id);
-    if (row !== undefined && row.el.disabled) {
-      // Mirror the click path: a disabled row does nothing, but say why.
-      const run = this.lastRun;
-      if (run !== null && run.phase === 'running') this.ctx.toast('Not enough tokens', 'bad');
-      return;
-    }
-    this.buyTool(def.id);
+    this.tryBuy(def);
   }
 
   // ---- frame update -------------------------------------------------------
@@ -250,10 +244,12 @@ export class Shop {
       row.footWeight.set(footprintWeight(foot));
       row.cost.set(atCap ? 'MAXED' : price.label);
       row.capped.set(atCap);
+      // A maxed row stays clickable so it can say why (aria-disabled, not disabled).
+      row.maxed.set(atCap ? 'true' : null);
       row.halted.set(Boolean(d.toolHalted[def.id]) && owned > 0);
       row.locked.set(false);
       row.lock.set(d.toolHalted[def.id] && owned > 0 ? 'Stalled' : '');
-      row.dis.set(atCap || !price.affordable || !running);
+      row.dis.set(!atCap && (!price.affordable || !running));
     }
 
     for (const def of locked) {
@@ -266,6 +262,7 @@ export class Shop {
       row.footWeight.set(footprintWeight(def.footprint));
       row.cost.set('LOCKED');
       row.capped.set(false);
+      row.maxed.set(null);
       row.halted.set(false);
       row.locked.set(true);
       row.lock.set(unlockHint(run, this.ctx.sim.meta, def) ?? 'Locked');
@@ -329,10 +326,34 @@ export class Shop {
     this.ctx.emit({ t: 'buyTool', id, count: this.qty });
   }
 
+  /** At the cap. Checked before affordability: more tokens would not help. */
+  private isMaxed(def: ToolDef): boolean {
+    const run = this.lastRun;
+    const d = this.lastDerived;
+    const owned = run?.tools[def.id] ?? 0;
+    return owned >= def.maxOwned || (d !== null && (d.headroom[def.id] ?? 1) <= 0);
+  }
+
+  /** A click or a hotkey: buy, or say why not. */
+  private tryBuy(def: ToolDef): void {
+    const run = this.lastRun;
+    if (run === null || run.phase !== 'running') return;
+    if (this.isMaxed(def)) {
+      this.ctx.toast(`Maxed out: ${formatInt(def.maxOwned)} is the cap`, 'bad');
+      return;
+    }
+    const row = this.toolRows.rows.get(def.id);
+    if (row !== undefined && row.el.disabled) {
+      this.ctx.toast('Not enough tokens', 'bad');
+      return;
+    }
+    this.buyTool(def.id);
+  }
+
   /** Hover/focus paints the ghost segment on the report bar. */
   private wirePreview(node: HTMLButtonElement, costOf: () => number): void {
     const enter = (): void => {
-      if (node.disabled) {
+      if (node.disabled || node.getAttribute('aria-disabled') === 'true') {
         this.onPreview(null);
         return;
       }
@@ -388,14 +409,16 @@ export class Shop {
       lock,
       cost,
       dis: new Dis(node),
+      maxed: new Attr(node, 'aria-disabled'),
       locked: new Flag(node, 'tm-row--locked'),
       capped: new Flag(node, 'tm-row--capped'),
       halted: new Flag(node, 'tm-row--halted'),
     };
     this.disposers.push(
       on(node, 'click', () => {
+        // Locked and unaffordable rows are disabled; a maxed one explains itself.
         if (node.disabled) return;
-        this.buyTool(id);
+        this.tryBuy(def);
       }),
     );
     this.wirePreview(node, () => {

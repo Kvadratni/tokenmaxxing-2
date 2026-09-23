@@ -152,7 +152,7 @@ describe('"You\'re absolutely right!"', () => {
   it('is multiplied by RLHF and Apology Templates', () => {
     const s = mkSim({ meta: metaWith({ helpful: 1, rlhf: 3 }) });
     s.run.owned.push('apology_templates');
-    expect(s.derived().sycophancyPower).toBeCloseTo(BALANCE.SYCOPHANCY_BASE * 2.3 * 1.5, 10);
+    expect(s.derived().sycophancyPower).toBeCloseTo(BALANCE.SYCOPHANCY_BASE * 1.3 * 1.2, 10);
   });
 
   it('costs context, which can compact you', () => {
