@@ -262,9 +262,10 @@ export const CONTEXT_WINDOW_LABELS = ['32K', '128K', '200K', '1M', '10M'] as con
 // Tools
 // ---------------------------------------------------------------------------
 
-// Rate and payback curves are the first game's, which measured well: early
-// tiers pay back fast so the first minute is about deciding, late tiers slowly
-// so they stay commitments.
+// Each tier makes ~10x the last and costs ~15x, the same step as a prompt's
+// requirement, so a new tier lands about once per prompt. Early tiers pay back
+// fast so the first minute is about deciding; late tiers slowly, so they stay
+// commitments. Tuned by tools/balance (see artifacts/balance/report.md).
 const TIER_RATE_BASE = 0.8;
 const TIER_RATE_GROWTH = 10;
 const TIER_PAYBACK_BASE_S = 62;
