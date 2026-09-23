@@ -117,6 +117,11 @@ export interface Help {
 export interface HelpOpts {
   /** Fired when the *player* dismisses the dialog, not on a programmatic close. */
   onDismiss?: () => void;
+  /**
+   * "Replay the tour". The host closes this dialog and runs the first-run tour
+   * on the run screen, starting a session first if there is none on screen.
+   */
+  onReplayTour?: () => void;
 }
 
 function section(parent: HTMLElement, testid: string, title: string, points: readonly string[], ordered = false): HTMLElement {
@@ -130,6 +135,7 @@ function section(parent: HTMLElement, testid: string, title: string, points: rea
 class HelpDialog implements Help {
   readonly modal: Modal;
   private readonly disposers: Array<() => void> = [];
+  private readonly closeBtn: HTMLButtonElement;
 
   constructor(parent: HTMLElement, private readonly opts: HelpOpts) {
     this.modal = new Modal({
@@ -192,8 +198,12 @@ class HelpDialog implements Help {
 
     const foot = el('div', { cls: 'tm-help__foot', parent: panel });
     el('p', { cls: 'tm-help__note', text: 'Reopen this any time with the ? button in the top bar.', parent: foot });
-    const close = btn({ cls: 'tm-btn tm-btn--primary', tid: TID.helpClose, text: 'Got it', parent: foot });
-    this.disposers.push(on(close, 'click', () => this.dismiss()));
+    const replay = btn({ cls: 'tm-btn', tid: TID.tourReplay, text: 'Replay the tour', parent: foot });
+    this.closeBtn = btn({ cls: 'tm-btn tm-btn--primary', tid: TID.helpClose, text: 'Got it', parent: foot });
+    this.disposers.push(
+      on(replay, 'click', () => this.opts.onReplayTour?.()),
+      on(this.closeBtn, 'click', () => this.dismiss()),
+    );
   }
 
   get el(): HTMLElement {
@@ -205,7 +215,8 @@ class HelpDialog implements Help {
   }
 
   open(): void {
-    this.modal.open(null);
+    // "Got it", not the first button: a stray Enter or Space must not replay the tour.
+    this.modal.open(this.closeBtn);
   }
 
   close(): void {

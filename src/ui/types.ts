@@ -48,7 +48,8 @@
  * - `canvasKey`: Space (anywhere on the run screen) or Enter on the focused
  *   agent. Click the centre of `AGENT_RECT`.
  * - `resetSave`: confirmed in Options. `clearMeta()` then reload.
- * - `screen`: informational. The sim should only tick while `ui.screen === 'run'`.
+ * - `screen`: informational. The sim should only tick while `ui.screen === 'run'`
+ *   and `!ui.holdsClock` (the first-run tour holds the clock while it is open).
  * - `scale`: the integer `--px` changed; `renderer.resize()`.
  * - `uiHover`: pointer entered a live control; a good hook for `audio.play('uiHover')`.
  */
@@ -143,6 +144,13 @@ export interface UIOpts {
   readonly onAction?: (a: UIAction) => void;
   /** Injectable clock (ms). Defaults to `performance.now`. Tests use this. */
   readonly now?: () => number;
+  /**
+   * Where the UI keeps its one flag of its own: that this browser has finished
+   * or skipped the first-run tour (`TOUR_KEY` in tour-steps.ts), deliberately
+   * outside the signed save. Defaults to `localStorage`; `null` keeps it for
+   * this page only. Tests use this.
+   */
+  readonly storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
   /** Screen to mount on. Defaults to `'title'`. */
   readonly screen?: UIScreen;
   /**
@@ -161,6 +169,13 @@ export interface UI {
   readonly screen: UIScreen;
   /** Current pixel scale (the numeric value behind `--px`). */
   readonly scale: number;
+  /**
+   * True while the UI wants the clock stopped: the first-run tour is open over
+   * the run screen. The host skips `sim.tick` while it is, so the human's
+   * patience does not drain while the player reads. Player input still goes
+   * through `onAction` as usual, and the sim still takes it.
+   */
+  readonly holdsClock: boolean;
   /** Called once per animation frame with fresh state. Must be cheap. */
   update(run: RunState, derived: DerivedStats, meta: MetaState): void;
   /** Feed a sim event: toasts, flashes, the legacy notice, achievements. */

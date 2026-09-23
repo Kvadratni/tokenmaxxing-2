@@ -151,8 +151,9 @@ function boot(): void {
     fps += (1000 / Math.max(rawMs, 1) - fps) * 0.08;
 
     // The title and Training screens are outside the run: the human's patience
-    // must not burn while the player is shopping for Training.
-    if (ui.screen === 'run') sim.tick(frameMs * timeScale);
+    // must not burn while the player is shopping for Training. Nor while the
+    // first-run tour is open over the run screen: the UI holds the clock.
+    if (ui.screen === 'run' && !ui.holdsClock) sim.tick(frameMs * timeScale);
 
     const derived = sim.derived();
     ui.update(sim.run, derived, sim.meta);

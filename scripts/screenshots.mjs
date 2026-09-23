@@ -3,6 +3,7 @@
  *
  *   node scripts/screenshots.mjs        # needs `npm run dev` on :5185
  *   GAME_URL=https://... node scripts/screenshots.mjs
+ *   SHOTS_OUT=artifacts/shots node scripts/screenshots.mjs   # anywhere else
  *
  * Writes docs/screenshots/ (committed, unlike artifacts/):
  *
@@ -14,6 +15,10 @@
  *   06-training.png            the Training tree, mid-meta
  *   07-achievements.png        the achievements screen
  *   08-achievement-popup.png   an unlock sliding in
+ *   09-tour.png                the first-run tour, on the context window
+ *
+ * Every shot but 09 marks the first-run tour seen (its own localStorage key,
+ * outside the save), so NEW SESSION goes straight to the board.
  *
  * Deterministic: every shot injects a fixed save and plays a fixed seed with
  * real time frozen, so re-running produces the same images and a diff means
@@ -33,7 +38,8 @@ import { chromium } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
 const URL = process.env.GAME_URL ?? 'http://localhost:5185/';
-const OUT = 'docs/screenshots';
+const OUT = process.env.SHOTS_OUT ?? 'docs/screenshots';
+const TOUR_KEY = 'tokenmaxxing2.tour';
 const VIEW = { width: 1320, height: 800 };
 const SEED = 0x51_09;
 mkdirSync(OUT, { recursive: true });
@@ -83,20 +89,27 @@ function save(extra = {}) {
 const b = await chromium.launch();
 const errs = [];
 
-/** A fresh browser context holding exactly `saveObj`. */
-async function open(saveObj, { hooks = true } = {}) {
+/**
+ * A fresh browser context holding exactly `saveObj`, and a tour already seen
+ * unless `tour` asks to meet it.
+ */
+async function open(saveObj, { hooks = true, tour = false } = {}) {
   const ctx = await b.newContext({ viewport: VIEW, deviceScaleFactor: 2 });
-  await ctx.addInitScript((text) => {
-    try {
-      if (sessionStorage.getItem('tm2-shot') !== '1') {
-        localStorage.clear();
-        localStorage.setItem('tokenmaxxing2.save.v1', text);
-        sessionStorage.setItem('tm2-shot', '1');
+  await ctx.addInitScript(
+    ({ text, tourKey, keepTour }) => {
+      try {
+        if (sessionStorage.getItem('tm2-shot') !== '1') {
+          localStorage.clear();
+          localStorage.setItem('tokenmaxxing2.save.v1', text);
+          if (!keepTour) localStorage.setItem(tourKey, '1');
+          sessionStorage.setItem('tm2-shot', '1');
+        }
+      } catch {
+        /* private mode */
       }
-    } catch {
-      /* private mode */
-    }
-  }, JSON.stringify(saveObj));
+    },
+    { text: JSON.stringify(saveObj), tourKey: TOUR_KEY, keepTour: tour },
+  );
   const p = await ctx.newPage();
   p.on('console', (m) => m.type() === 'error' && errs.push(m.text()));
   p.on('pageerror', (e) => errs.push(String(e)));
@@ -330,6 +343,41 @@ async function reportAndDraft(p, pick, others) {
   await p.evaluate(() => document.activeElement?.blur?.());
   await p.waitForTimeout(900); // fully slid in
   await shoot(p, '08-achievement-popup');
+  await ctx.close();
+}
+
+// ---- 9. the first-run tour -------------------------------------------------------
+{
+  // A first session in a browser that has never seen the tour, on its sixth
+  // step: the context window, lit, with the pile on the floor lit beside it.
+  const first = {
+    version: 1,
+    thumbs: 0,
+    totalThumbsEarned: 0,
+    runs: 0,
+    wins: 0,
+    bestPrompt: -1,
+    levels: {},
+    achievements: { qa_engineer: 1 },
+    stats: {},
+    legacy: { verdict: 'none' },
+  };
+  const { ctx, p } = await open(first, { tour: true });
+  await p.getByTestId('start-run').click();
+  await p.evaluate((s) => window.__TOKENMAXXING2__.startRun(s), SEED);
+  await p.getByTestId('tour-step-intro').waitFor();
+  await p.getByTestId('tour-next').click();
+  await p.getByTestId('tour-step-agent').waitFor();
+  for (let i = 0; i < 3; i++) await p.getByTestId('agent-hit').click();
+  await p.getByTestId('tour-step-tokens').waitFor();
+  for (const id of ['prompt', 'patience', 'context']) {
+    await p.getByTestId('tour-next').click();
+    await p.getByTestId(`tour-step-${id}`).waitFor();
+  }
+  // The wallet rolls up to what the three clicks earned (it settles in ~1.3s).
+  await p.waitForTimeout(1_500);
+  await tidy(p);
+  await shoot(p, '09-tour');
   await ctx.close();
 }
 

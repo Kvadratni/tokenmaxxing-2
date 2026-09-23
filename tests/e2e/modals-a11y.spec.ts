@@ -262,6 +262,8 @@ test.describe('accessibility', () => {
     const w = await bootPage(page, { keepCoach: true });
     await startRun(page);
     const tips = page.locator(`[data-testid^="${TID.coachTip}-"]`);
+    // Tips fire on state ("click the agent" is the tour's now): a quarter-full window.
+    await page.evaluate(() => window.__TOKENMAXXING2__!.setContext(0.25));
     await expect(tips.first()).toBeVisible();
     expect(await tips.count(), 'one tip at a time').toBe(1);
     const id = ((await tips.first().getAttribute('data-testid')) ?? '').slice(TID.coachTip.length + 1);

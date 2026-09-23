@@ -36,11 +36,17 @@ ships a new model, each one named worse than the last: 2.0, 2.5, 2.5 (new),
 <td><img src="docs/screenshots/06-training.png" alt="Training, the meta tree"></td>
 <td><img src="docs/screenshots/07-achievements.png" alt="Achievements"></td>
 </tr>
+<tr>
+<td><img src="docs/screenshots/09-tour.png" alt="The first-run tour"></td>
+<td></td>
+</tr>
 </table>
 
 ## Play
 
-Open the link and click **NEW SESSION**. It's a static page, so there's no
+Open the link and click **NEW SESSION**. Your first session opens with a short
+guided tour, with the clock frozen, that walks through every part of the screen.
+You can replay it any time from How to play. It's a static page, so there's no
 account and no server. Progress lives in your browser's localStorage.
 
 To run it locally:

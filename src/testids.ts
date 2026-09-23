@@ -148,6 +148,18 @@ export const TID = {
   coach: 'coach',
   coachTip: 'coach-tip',
   coachDismiss: 'coach-dismiss',
+  /**
+   * The first-run guided tour: a spotlight over one element at a time with a
+   * tooltip. The clock is frozen while it is open.
+   */
+  tour: 'tour',
+  /** `${tourStep}-${stepId}`: the tooltip for one step. */
+  tourStep: 'tour-step',
+  tourNext: 'tour-next',
+  tourBack: 'tour-back',
+  tourSkip: 'tour-skip',
+  /** "Replay the tour", in How to play. */
+  tourReplay: 'tour-replay',
   /** Retired: game 1's ambient CLI session. Kept only because TIDs never get removed. */
   cliBackdrop: 'cli-backdrop',
   /**

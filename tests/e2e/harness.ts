@@ -13,8 +13,9 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { TID, tid } from '../../src/testids.ts';
 import type { DerivedStats, MetaState, RunState } from '../../src/sim/types.ts';
 import { AGENT_RECT } from '../../src/render/atlas-types.ts';
+import { TOUR_KEY } from '../../src/ui/tour-steps.ts';
 
-export { TID, tid };
+export { TID, tid, TOUR_KEY };
 
 /** The game 2 save key, and the game 1 key the sequel imports from. */
 export const SAVE_KEY = 'tokenmaxxing2.save.v1';
@@ -88,6 +89,13 @@ export interface BootOpts {
    * opts out to test them.
    */
   keepCoach?: boolean;
+  /**
+   * The first-run tour opens over the run screen, clock held, on the first NEW
+   * SESSION a browser ever presses. The harness marks it seen (its own key,
+   * `TOUR_KEY`, outside the signed save) so every other spec starts on a quiet
+   * board; the tour spec sets this to meet it.
+   */
+  tour?: boolean;
 }
 
 /**
@@ -100,12 +108,13 @@ export interface BootOpts {
 export async function bootPage(page: Page, opts: BootOpts = {}): Promise<Watcher> {
   const w = watch(page);
   await page.addInitScript(
-    ({ save, legacy, saveKey, legacyKey }) => {
+    ({ save, legacy, saveKey, legacyKey, tourKey, tour }) => {
       try {
         if (sessionStorage.getItem('tm2-e2e-booted') !== '1') {
           localStorage.clear();
           if (save !== null) localStorage.setItem(saveKey, save);
           if (legacy !== null) localStorage.setItem(legacyKey, legacy);
+          if (!tour) localStorage.setItem(tourKey, '1');
           sessionStorage.setItem('tm2-e2e-booted', '1');
         }
       } catch {
@@ -117,6 +126,8 @@ export async function bootPage(page: Page, opts: BootOpts = {}): Promise<Watcher
       legacy: opts.legacySave ?? null,
       saveKey: SAVE_KEY,
       legacyKey: LEGACY_KEY,
+      tourKey: TOUR_KEY,
+      tour: opts.tour === true,
     },
   );
   if (!opts.keepCoach) await retireCoachMarks(page);

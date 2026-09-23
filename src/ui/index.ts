@@ -46,6 +46,7 @@ import { CardStrip } from './strip.ts';
 import { SummaryPicker } from './summary.ts';
 import { TitleScreen } from './title.ts';
 import { Toasts } from './toasts.ts';
+import { browserStorage, createTour } from './tour.ts';
 import type { SceneRect, ToastTone, UI, UIAction, UICtx, UIOpts, UIScreen } from './types.ts';
 
 export type {
@@ -98,6 +99,8 @@ export function createUI(opts: UIOpts): UI {
   let lastRun: RunState = sim.run;
   let lastDerived: DerivedStats | null = null;
   const disposers: Array<() => void> = [];
+  /** A session was just asked for on a browser that has never seen the tour. */
+  let tourPending = false;
 
   const emit = (a: UIAction): void => {
     if (destroyed) return;
@@ -106,6 +109,8 @@ export function createUI(opts: UIOpts): UI {
       runOver.holdForNewRun();
       hud.reset();
       stage.reset();
+      // The first NEW SESSION ever opens on the tour, with the clock held.
+      if (!tour.seen) tourPending = true;
     }
     opts.onAction?.(a);
   };
@@ -191,12 +196,15 @@ export function createUI(opts: UIOpts): UI {
     target.focus();
   }
 
-  /** Open or close the sheet. A no-op where the shop is in the flow. */
-  function setDrawer(open: boolean): void {
+  /**
+   * Open or close the sheet. A no-op where the shop is in the flow. The tour
+   * opens it for its tools step with `moveFocus` off: its own card keeps focus.
+   */
+  function setDrawer(open: boolean, moveFocus = true): void {
     if (open && shopMode !== 'drawer') return;
     if (open === drawerOpen) return;
     // Captured *before* anything goes inert: an inert ancestor blurs its focus.
-    if (open) {
+    if (open && moveFocus) {
       const active = document.activeElement;
       drawerPrevFocus = active instanceof HTMLElement ? active : null;
     }
@@ -205,6 +213,7 @@ export function createUI(opts: UIOpts): UI {
     shopBtnExpanded.set(String(open));
     shopBtnLabel.set(open ? 'Close the shop' : 'Open the shop');
     syncDrawerInert();
+    if (!moveFocus) return;
     if (open) {
       focusIntoDrawer();
       return;
@@ -233,7 +242,7 @@ export function createUI(opts: UIOpts): UI {
   const title = new TitleScreen(ui, ctx);
   const metaScreen = new MetaScreen(ui, ctx);
   const achievements = new AchievementsScreen(ui, ctx);
-  const help = createHelp(ui, { onDismiss: () => help.close() });
+  const help = createHelp(ui, { onDismiss: () => help.close(), onReplayTour: () => replayTour() });
 
   let reduced = false;
   let firstRun = true;
@@ -264,7 +273,47 @@ export function createUI(opts: UIOpts): UI {
     summary.isOpen ||
     runOver.isOpen;
 
-  const coach = createCoach(ui, { enabled: () => firstRun && screen === 'run' && !dialogOpen() });
+  const coach = createCoach(ui, { enabled: () => firstRun && screen === 'run' && !dialogOpen() && !tour.isOpen });
+
+  // ---- the first-run tour ------------------------------------------------------
+  // Over everything on the run screen, with the clock held (`holdsClock`).
+  const tour = createTour(ui, {
+    storage: opts.storage === undefined ? browserStorage() : opts.storage,
+    find: (id) => ui.querySelector<HTMLElement>(`[data-testid="${id}"]`),
+    emit: (a) => emit(a),
+    setDrawer: (open) => {
+      const was = drawerOpen;
+      setDrawer(open, false);
+      return drawerOpen !== was;
+    },
+    reducedMotion: () => reduced,
+    // A tip already up would float over the spotlight; the rest wait their turn.
+    onOpen: () => coach.clear(),
+    onClose: () => {
+      if (!destroyed && screen === 'run') stage.agentBtn.focus();
+    },
+  });
+
+  /** Open the tour a NEW SESSION asked for, if one did. */
+  function startPendingTour(): boolean {
+    if (!tourPending) return false;
+    tourPending = false;
+    tour.start();
+    return true;
+  }
+
+  /** How to play's "Replay the tour": on the run screen, starting a session if there is none. */
+  function replayTour(): void {
+    if (destroyed) return;
+    help.close();
+    if (screen !== 'run') {
+      emit({ t: 'startRun' });
+      tourPending = true;
+      setScreen('run');
+      return;
+    }
+    tour.start();
+  }
 
   const reducedAttr = new Attr(ui, 'data-reduced-motion');
   const fpsAttr = new Attr(ui, 'data-show-fps');
@@ -281,6 +330,7 @@ export function createUI(opts: UIOpts): UI {
     setShopMode(s.shop);
     syncTopbarHeight();
     emit({ t: 'scale', px: s.px });
+    tour.reflow();
   });
 
   // ---- Training unlocks the run layer depends on ----------------------------
@@ -297,7 +347,11 @@ export function createUI(opts: UIOpts): UI {
 
   // ---- screens ---------------------------------------------------------------
   function setScreen(s: UIScreen): void {
-    if (destroyed || s === screen) return;
+    if (destroyed) return;
+    if (s === screen) {
+      if (s === 'run') startPendingTour();
+      return;
+    }
     const prev = screen;
     screen = s;
     ui.dataset['screen'] = s;
@@ -307,6 +361,8 @@ export function createUI(opts: UIOpts): UI {
       summary.close();
       runOver.close();
       coach.dismissAll();
+      // Unfinished, so not seen: the next NEW SESSION offers it again.
+      tour.close();
       setDrawer(false);
     }
     options.close();
@@ -319,7 +375,7 @@ export function createUI(opts: UIOpts): UI {
     syncNet();
     if (s === 'run') {
       refreshUnlocked();
-      stage.agentBtn.focus();
+      if (!startPendingTour()) stage.agentBtn.focus();
     } else if (s === 'title') {
       title.primary.focus();
     } else if (s === 'achievements') {
@@ -358,7 +414,8 @@ export function createUI(opts: UIOpts): UI {
 
   disposers.push(
     bindHotkeys(window, {
-      isBlocked: () => screen !== 'run' || dialogOpen(),
+      // The tour hears its own keys first (tour.ts); the game's wait.
+      isBlocked: () => screen !== 'run' || dialogOpen() || tour.isOpen,
       spaceIsLocal: () => drawerOpen,
       generate: () => {
         if (running()) emit({ t: 'canvasKey' });
@@ -383,6 +440,8 @@ export function createUI(opts: UIOpts): UI {
         if (d !== null && d.canCompact && running() && lastRun.compactingMs <= 0) emit({ t: 'compact' });
       },
       escape: () => {
+        // The tour takes Escape before this ever runs; belt and braces.
+        if (tour.isOpen) return;
         // Topmost first: dialogs float above the sheet.
         if (help.isOpen) return help.close();
         if (about.isOpen) return about.close();
@@ -424,6 +483,8 @@ export function createUI(opts: UIOpts): UI {
       draft.update(run);
       runOver.update(run, derived, meta);
       coach.update(run, derived);
+      // Last: it measures what everything above just laid out.
+      tour.update();
     } else {
       title.update(meta);
       metaScreen.update(meta);
@@ -437,6 +498,10 @@ export function createUI(opts: UIOpts): UI {
   function handle(e: GameEvent): void {
     if (destroyed) return;
     switch (e.t) {
+      case 'click':
+        // The tour's "try it" step counts the clicks the sim actually took.
+        if (!e.auto) tour.noteClick();
+        break;
       case 'denied':
         toasts.push(DENIED_TEXT[e.reason] ?? 'Not right now', 'bad');
         break;
@@ -527,6 +592,7 @@ export function createUI(opts: UIOpts): UI {
     disposers.length = 0;
     scaleCtl.destroy();
     net.destroy();
+    tour.destroy();
     coach.destroy();
     help.destroy();
     legacy.destroy();
@@ -557,6 +623,9 @@ export function createUI(opts: UIOpts): UI {
     },
     get scale() {
       return scaleCtl.px;
+    },
+    get holdsClock() {
+      return tour.isOpen;
     },
     update,
     handle,

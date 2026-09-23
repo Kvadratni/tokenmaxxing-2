@@ -61,7 +61,9 @@ const SIZES = [
  * A returning player's save: past the first session (so no coach marks float
  * over the controls) and already holding QA Engineer (so its popup, which the
  * test hooks would trigger, does not slide in over the corner). Unsigned saves
- * are trusted under `?testhooks=1` and simply get signed.
+ * are trusted under `?testhooks=1` and simply get signed. The first-run tour
+ * is marked seen too (its own key, outside the save), so NEW SESSION goes
+ * straight to the board.
  */
 const SAVE = JSON.stringify({
   version: 1,
@@ -72,6 +74,8 @@ const SAVE = JSON.stringify({
   achievements: { qa_engineer: 1 },
   legacy: { verdict: 'none' },
 });
+/** The first-run tour's "seen" (src/ui/tour-steps.ts). */
+const TOUR_KEY = 'tokenmaxxing2.tour';
 
 /** Everything measurable about the current layout. Runs in the page. */
 function probe(hitIds) {
@@ -178,17 +182,21 @@ for (const s of SIZES) {
     hasTouch: s.mobile,
     isMobile: s.mobile,
   });
-  await ctx.addInitScript((save) => {
-    try {
-      if (sessionStorage.getItem('tm2-sweep') !== '1') {
-        localStorage.clear();
-        localStorage.setItem('tokenmaxxing2.save.v1', save);
-        sessionStorage.setItem('tm2-sweep', '1');
+  await ctx.addInitScript(
+    ({ save, tourKey }) => {
+      try {
+        if (sessionStorage.getItem('tm2-sweep') !== '1') {
+          localStorage.clear();
+          localStorage.setItem('tokenmaxxing2.save.v1', save);
+          localStorage.setItem(tourKey, '1');
+          sessionStorage.setItem('tm2-sweep', '1');
+        }
+      } catch {
+        /* private mode */
       }
-    } catch {
-      /* private mode */
-    }
-  }, SAVE);
+    },
+    { save: SAVE, tourKey: TOUR_KEY },
+  );
   const p = await ctx.newPage();
   const errs = [];
   p.on('pageerror', (e) => errs.push(String(e)));

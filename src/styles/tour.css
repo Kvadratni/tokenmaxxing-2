@@ -1,0 +1,180 @@
+/*
+ * The first-run tour (src/ui/tour.ts): dim panels around one or two cut-outs,
+ * an amber ring inside each cut-out's padding, and a tooltip beside the first.
+ *
+ * Lives inside `.tm-ui`, so `--px`, `--u`, `--g` and the `--t*` type scale all
+ * resolve. Every panel, ring and the tooltip is `position: fixed` at viewport
+ * pixels that tour.ts writes. The layer itself takes no pointer events: only
+ * the dim panels and the tooltip do, and nothing at all sits over a cut-out,
+ * so the thing being explained stays clickable.
+ */
+
+.tm-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 45; /* over the chrome (30), the coach (36), the drawer (25) and any dialog (40); under toasts (60) */
+  pointer-events: none;
+}
+
+.tm-tour__layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+}
+
+.tm-tour__shade {
+  position: fixed;
+  background: rgba(var(--bg0-rgb), 0.8);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/* Square pixel corners: no radius anywhere. */
+.tm-tour__ring {
+  position: fixed;
+  pointer-events: none;
+  border: calc(2 * var(--g)) solid var(--amber);
+  box-shadow:
+    0 0 0 var(--g) var(--bg0),
+    0 0 calc(3 * var(--u)) rgba(var(--amber-rgb), 0.35);
+}
+
+.tm-tour[data-pulse] .tm-tour__ring {
+  animation: tm-tour-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes tm-tour-pulse {
+  50% {
+    border-color: #ffd98a;
+    box-shadow:
+      0 0 0 var(--g) var(--bg0),
+      0 0 calc(7 * var(--u)) rgba(var(--amber-rgb), 0.75);
+  }
+}
+
+.tm-tour__tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(5 * var(--g));
+  /* 304: room for a 23-character title on one line (tour-steps.ts). */
+  width: min(calc(100vw - 16px), calc(304 * var(--g)));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: calc(6 * var(--g)) calc(8 * var(--g)) calc(7 * var(--g));
+  pointer-events: auto;
+  color: var(--fg0);
+  background: var(--bg1);
+  border: calc(2 * var(--g)) solid var(--amber);
+  box-shadow:
+    inset 0 0 0 var(--g) var(--bg0),
+    0 calc(3 * var(--u)) calc(10 * var(--u)) rgba(0, 0, 0, 0.6);
+}
+
+.tm-tour__tip:focus {
+  outline: none;
+}
+
+/* The shop drawer is still sliding: the card waits, invisible and unpressable. */
+.tm-tour[data-settling] .tm-tour__tip {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tm-tour__text {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--g));
+}
+
+.tm-tour__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--gap);
+}
+
+.tm-tour__count {
+  letter-spacing: calc(2 * var(--g));
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-tour__keys {
+  display: flex;
+  align-items: baseline;
+  gap: calc(3 * var(--g));
+  color: var(--fg2);
+  white-space: nowrap;
+}
+
+.tm-tour__keys span {
+  margin-right: calc(3 * var(--g));
+}
+
+.tm-tour__keys span:last-child {
+  margin-right: 0;
+}
+
+.tm-tour__title {
+  margin: 0;
+  font-size: var(--t2);
+  line-height: calc(20 * var(--g));
+  font-weight: 700;
+  color: var(--white);
+}
+
+.tm-tour__body {
+  margin: 0;
+  color: var(--fg0);
+}
+
+/* The live "2/3" on the interactive step. */
+.tm-tour__clicks {
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-tour__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  padding-top: calc(4 * var(--g));
+  border-top: var(--g) solid var(--line);
+}
+
+.tm-tour__foot .tm-btn {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Reads as a way out, not as a third choice: no box, flush with the copy. */
+.tm-tour__skip {
+  padding-left: 0;
+  border-color: transparent;
+}
+
+/* A thumb has no arrow keys: the hints only take room. */
+@media (pointer: coarse) {
+  .tm-tour__keys {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-tour__ring,
+  .tm-tour__tip {
+    animation: none !important;
+  }
+}
+
+.tm-ui[data-reduced-motion='1'] .tm-tour__ring,
+.tm-ui[data-reduced-motion='1'] .tm-tour__tip {
+  animation: none !important;
+}

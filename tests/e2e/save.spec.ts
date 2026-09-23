@@ -11,6 +11,7 @@ import { signSave } from '../../src/sim/save.ts';
 import {
   SAVE_KEY,
   TID,
+  TOUR_KEY,
   bootPage,
   expectClean,
   frames,
@@ -151,7 +152,9 @@ test.describe('persistence', () => {
     await bootPage(page);
     await grantThumbs(page, 1);
     const keys = await page.evaluate(() => Object.keys(localStorage));
-    expect(keys).toEqual([SAVE_KEY]);
+    // The tour's "seen" is its own key on purpose, outside the signed save (the
+    // harness writes it). Nothing else may be there.
+    expect(keys.filter((k) => k !== TOUR_KEY)).toEqual([SAVE_KEY]);
     const save = await readSave(page);
     expect(save['version']).toBe(1);
     expect(save['thumbs']).toBe(1);

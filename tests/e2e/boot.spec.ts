@@ -51,6 +51,8 @@ const DYNAMIC = new Set<string>([
   TID.activeCard,
   TID.coachTip,
   TID.coachDismiss,
+  // `${tourStep}-${stepId}`: the tour's card is named for the step it is on.
+  TID.tourStep,
   TID.incidentName,
   TID.incidentTimer,
   TID.toast,

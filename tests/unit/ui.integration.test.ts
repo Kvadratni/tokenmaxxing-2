@@ -12,7 +12,7 @@ import { TID, tid } from '../../src/testids.ts';
 import { applySimAction } from '../../src/ui/actions.ts';
 import { createUI } from '../../src/ui/index.ts';
 import type { UI } from '../../src/ui/types.ts';
-import { key, must, text } from './ui.fake-sim.ts';
+import { key, must, text, tourStorage } from './ui.fake-sim.ts';
 
 let ui: UI | null = null;
 let host: HTMLElement | null = null;
@@ -25,7 +25,9 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function boot(): { sim: Sim; ui: UI; root: HTMLElement; frame: () => void; step: (ms: number) => void } {
+function boot(
+  { tour = false }: { tour?: boolean } = {},
+): { sim: Sim; ui: UI; root: HTMLElement; frame: () => void; step: (ms: number) => void } {
   const sim = createSim({ storage: null, seed: 7, autoStart: true, trustSave: true });
   const root = document.createElement('div');
   document.body.appendChild(root);
@@ -34,6 +36,8 @@ function boot(): { sim: Sim; ui: UI; root: HTMLElement; frame: () => void; step:
     root,
     sim,
     screen: 'title',
+    // A returning browser unless asked: the first-run tour has its own test below.
+    storage: tourStorage(!tour),
     onAction: (a) => {
       if (applySimAction(sim, a)) return;
       // The renderer's job in the real host: every stage click lands on the agent.
@@ -43,8 +47,9 @@ function boot(): { sim: Sim; ui: UI; root: HTMLElement; frame: () => void; step:
   ui = u;
   sim.subscribe((e) => u.handle(e));
   const frame = (): void => u.update(sim.run, sim.derived(), sim.meta);
+  // The host's frame loop: no ticks while the UI holds the clock (src/main.ts).
   const step = (ms: number): void => {
-    for (let t = 0; t < ms; t += 100) sim.tick(100);
+    for (let t = 0; t < ms; t += 100) if (!u.holdsClock) sim.tick(100);
     frame();
   };
   frame();
@@ -107,6 +112,36 @@ describe('the UI on the real sim', () => {
     expect(sim.derived().sycophancyPower).toBeLessThan(before);
     const fade = Number(must(root, TID.sycophancyButton).style.getPropertyValue('--syc'));
     expect(fade).toBeLessThan(1);
+  });
+
+  it('opens the first session on the tour: the clock is held, and its clicks are real ones', () => {
+    const { sim, ui: u, root, frame, step } = boot({ tour: true });
+    (must(root, TID.startRun) as HTMLButtonElement).click();
+    frame();
+    expect(u.holdsClock).toBe(true);
+    const patience = sim.run.patienceMs;
+    step(5_000);
+    expect(sim.run.patienceMs, 'the human waits while the player reads').toBe(patience);
+    expect(sim.run.elapsedMs).toBe(0);
+
+    (must(root, TID.tourNext) as HTMLButtonElement).click();
+    expect(root.querySelector(`[data-testid="${tid(TID.tourStep, 'agent')}"]`)).not.toBeNull();
+    const agent = must(root, TID.agent);
+    for (let i = 0; i < 2; i++) {
+      agent.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+    }
+    key(document.activeElement ?? window, ' ');
+    frame();
+    // Three clicks the sim took with time frozen: tokens, and context with them.
+    expect(sim.run.clicks).toBe(3);
+    expect(sim.run.tokens).toBeGreaterThan(0);
+    expect(sim.run.context).toBeGreaterThan(0);
+    expect(text(root, tid(TID.tourStep, 'agent'))).toContain('3/3');
+
+    key(document.activeElement ?? window, 'Escape');
+    expect(u.holdsClock).toBe(false);
+    step(1_000);
+    expect(sim.run.patienceMs).toBeLessThan(patience);
   });
 
   it('runs out of patience into THE HUMAN SWITCHED MODELS, then Training', () => {

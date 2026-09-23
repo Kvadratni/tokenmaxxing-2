@@ -4,6 +4,7 @@
  * vocabulary left in it.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { BALANCE } from '../../src/sim/content.ts';
 import { TID } from '../../src/testids.ts';
 import { createUI } from '../../src/ui/index.ts';
 import { makeFakeSim, makeIncident, makeRun, makeUnlocked, mountUI, q, unmountAll } from './ui.fake-sim.ts';
@@ -26,6 +27,8 @@ const SCOPED: ReadonlySet<string> = new Set([
   TID.achievementPopupCard,
   TID.coachTip,
   TID.coachDismiss,
+  // `${tourStep}-${stepId}`: the tour's card names the step it is on.
+  TID.tourStep,
   // Only while something is on screen (each has its own test).
   TID.incidentName,
   TID.incidentTimer,
@@ -35,7 +38,8 @@ const SCOPED: ReadonlySet<string> = new Set([
 describe('the shell', () => {
   it('renders every frozen testid', () => {
     const m = mountUI({
-      run: makeRun({ incidents: [makeIncident('wait_stop')], cards: ['please'] }),
+      // A quarter-full window, so a coach tip is up too (they fire on state).
+      run: makeRun({ incidents: [makeIncident('wait_stop')], cards: ['please'], context: BALANCE.BASE_CONTEXT * 0.25 }),
       unlocked: makeUnlocked(['compact']),
       upgrades: ['streaming'],
     });

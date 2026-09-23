@@ -46,6 +46,14 @@ describe('help', () => {
     expect(meta.textContent).toContain('👍');
   });
 
+  it('opens on Got it, not on Replay the tour, which sits beside it', () => {
+    const m = mountUI();
+    (must(m.root, TID.helpButton) as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(must(m.root, TID.helpClose));
+    expect(must(m.root, TID.tourReplay).textContent).toBe('Replay the tour');
+    expect(must(m.root, TID.helpModal).contains(must(m.root, TID.tourReplay))).toBe(true);
+  });
+
   it('closes on Got it, and on Escape', () => {
     const m = mountUI();
     (must(m.root, TID.helpButton) as HTMLButtonElement).click();

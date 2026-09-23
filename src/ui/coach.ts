@@ -106,16 +106,11 @@ const firstTool = TOOLS[0];
 /**
  * Evaluated top-down; the first unseen tip whose predicate holds is shown, so
  * the order here is the priority order.
+ *
+ * "Click the agent" is not here: the first-run tour (tour.ts) has the player
+ * do it before the clock starts. What is left fires when its moment arrives.
  */
 export const COACH_TIPS: readonly CoachTip[] = [
-  {
-    id: 'generate',
-    text: 'Click the agent, or press Space, to generate tokens.',
-    anchors: [TID.agent, TID.scene],
-    // Over the agent, pointing down: below it is the prompt the human typed.
-    placement: 'above',
-    when: (run) => run.phase === 'running',
-  },
   {
     id: 'context',
     text: 'Everything you generate lands in your context window. When it fills up, you get compacted and forget.',
@@ -158,6 +153,8 @@ export interface Coach {
   readonly el: HTMLElement;
   /** Called every frame with fresh state; decides whether to show a tip. */
   update(run: RunState, derived: DerivedStats): void;
+  /** Take down the tip on screen, if any, and keep offering the rest. */
+  clear(): void;
   dismissAll(): void;
   destroy(): void;
 }
@@ -210,6 +207,11 @@ class CoachMarks implements Coach {
       this.show(tip);
       return;
     }
+  }
+
+  clear(): void {
+    if (this.destroyed) return;
+    this.clearLive();
   }
 
   /**

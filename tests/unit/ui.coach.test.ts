@@ -36,16 +36,15 @@ describe('coach marks', () => {
     for (const id of ['context', 'patience', 'claim', 'compaction']) expect(ids).toContain(id);
   });
 
-  it('starts by pointing at the agent', () => {
+  it('leaves "click the agent" to the tour: a fresh session starts quiet', () => {
+    expect(COACH_TIPS.map((t) => t.id)).not.toContain('generate');
     const m = mountUI();
-    expect(tipOn(m.root)).toBe('generate');
-    expect(must(m.root, tid(TID.coachTip, 'generate')).textContent).toContain('Space');
+    expect(tipOn(m.root)).toBeNull();
   });
 
   it('teaches each idea when it becomes true, once, in priority order', () => {
     const m = mountUI();
-    expect(tipOn(m.root)).toBe('generate');
-    expect(next(m)).toBeNull();
+    expect(tipOn(m.root)).toBeNull();
 
     m.sim.run.context = BALANCE.BASE_CONTEXT * 0.25;
     expect(next(m)).toBe('context');
@@ -69,18 +68,21 @@ describe('coach marks', () => {
   });
 
   it('retires a tip on its own after a few seconds', () => {
-    const m = mountUI();
-    expect(tipOn(m.root)).toBe('generate');
+    const m = mountUI({ run: makeRun({ context: BALANCE.BASE_CONTEXT * 0.25 }) });
+    expect(tipOn(m.root)).toBe('context');
     vi.advanceTimersByTime(COACH_TIP_MS + 10);
     expect(tipOn(m.root)).toBeNull();
   });
 
   it('stays out of the way on any session after the first, and under dialogs', () => {
-    const later = mountUI({ meta: makeMeta({ runs: 1 }) });
+    const quarter = BALANCE.BASE_CONTEXT * 0.25;
+    const later = mountUI({ meta: makeMeta({ runs: 1 }), run: makeRun({ context: quarter }) });
     expect(tipOn(later.root)).toBeNull();
     unmountAll();
-    const m = mountUI({ run: makeRun({ phase: 'drafting', draftOffer: ['please', 'grandma', 'tip_200'] }) });
-    expect(q(m.root, tid(TID.coachTip, 'generate'))).toBeNull();
+    const m = mountUI({
+      run: makeRun({ context: quarter, phase: 'drafting', draftOffer: ['please', 'grandma', 'tip_200'] }),
+    });
+    expect(q(m.root, tid(TID.coachTip, 'context'))).toBeNull();
   });
 });
 
@@ -98,8 +100,7 @@ describe('placing a tip', () => {
   const band = rect(stage.left, stage.bottom - 44, stage.width, 44); // 22 scene px
   const agent = rect(508, 330, 64, 124);
 
-  it('puts the agent tip above the agent, pointing down', () => {
-    expect(COACH_TIPS.find((t) => t.id === 'generate')!.placement).toBe('above');
+  it('puts a tip asked to go above its anchor there, pointing down', () => {
     const p = placeTip(agent, 300, 40, 1280, 720, 'above', band);
     expect(p.side).toBe('above');
     expect(p.top + 40).toBeLessThanOrEqual(agent.top);

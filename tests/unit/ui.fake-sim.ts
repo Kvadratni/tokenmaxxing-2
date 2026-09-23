@@ -34,6 +34,7 @@ import type {
   UpgradeDef,
 } from '../../src/sim/types.ts';
 import { createUI } from '../../src/ui/index.ts';
+import { TOUR_KEY } from '../../src/ui/tour-steps.ts';
 import type { UI, UIAction, UIScreen, UISimView, UIUnlocked } from '../../src/ui/types.ts';
 
 export function makeSettings(over: Partial<Settings> = {}): Settings {
@@ -273,6 +274,8 @@ export interface Mounted {
   tick: (ms: number) => void;
   /** Actions of one type, for terse assertions. */
   sent: <T extends UIAction['t']>(t: T) => Extract<UIAction, { t: T }>[];
+  /** What the UI keeps in storage: the tour's "seen". */
+  storage: MemoryStorage;
 }
 
 const live: Mounted[] = [];
@@ -282,9 +285,41 @@ export interface MountOpts extends FakeSimInit {
   derived?: Partial<DerivedStats>;
   /** Apply the sim-bound actions the way a host would. Off by default. */
   onAction?: (a: UIAction, m: Mounted) => void;
+  /**
+   * The first-run tour opens on NEW SESSION in a browser that has never seen
+   * it. Every mount marks it seen, as the e2e harness does, so the other specs
+   * start on a quiet board; ui.tour asks for `'fresh'`.
+   */
+  tour?: 'seen' | 'fresh';
+  /** The UI's storage. Default: a fresh `memoryStorage`, seeded per `tour`. */
+  storage?: MemoryStorage;
+}
+
+export type MemoryStorage = Pick<Storage, 'getItem' | 'setItem'> & { readonly data: Map<string, string> };
+
+/**
+ * A Web Storage stand-in for the UI's one flag. A fresh one per mount keeps
+ * tests apart, and on Node 25 the global `localStorage` is Node's own (with no
+ * backing file, and no `setItem`), not happy-dom's.
+ */
+export function memoryStorage(init: Readonly<Record<string, string>> = {}): MemoryStorage {
+  const data = new Map(Object.entries(init));
+  return {
+    data,
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, String(v));
+    },
+  };
+}
+
+/** Storage for a browser that has seen the tour already, or (`false`) never has. */
+export function tourStorage(seen: boolean): MemoryStorage {
+  return memoryStorage(seen ? { [TOUR_KEY]: '1' } : {});
 }
 
 export function mountUI(o: MountOpts = {}): Mounted {
+  const storage = o.storage ?? tourStorage(o.tour !== 'fresh');
   const root = document.createElement('div');
   document.body.appendChild(root);
   const sim = makeFakeSim(o);
@@ -296,6 +331,7 @@ export function mountUI(o: MountOpts = {}): Mounted {
     sim,
     screen: o.screen ?? 'run',
     now: () => clock,
+    storage,
     onAction: (a) => {
       actions.push(a);
       if (m && o.onAction) o.onAction(a, m);
@@ -306,6 +342,7 @@ export function mountUI(o: MountOpts = {}): Mounted {
     root,
     sim,
     actions,
+    storage,
     derived: { ...(o.derived ?? {}) },
     frame: () => ui.update(sim.run, makeDerived(sim.run, m!.derived), sim.meta),
     tick: (ms: number) => {
