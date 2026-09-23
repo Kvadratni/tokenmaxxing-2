@@ -30,11 +30,19 @@ await p.goto(URL, { waitUntil: 'networkidle' });
 const title = await p.getByTestId('title-screen').isVisible().catch(() => false);
 await p.waitForTimeout(1_500);
 
-// Play for a moment: start a session and click the agent.
+// Play for a moment: start a session and click the agent. A fresh visitor
+// gets the first-run tour first, so skip it the way a player would.
 let played = false;
+let tour = 'not shown';
 if (title) {
   await p.getByTestId('start-run').click();
   await p.getByTestId('report-button').waitFor({ timeout: 10_000 });
+  const skip = p.getByTestId('tour-skip');
+  if (await skip.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await skip.click();
+    await p.getByTestId('tour').waitFor({ state: 'hidden', timeout: 5_000 });
+    tour = 'shown, skipped';
+  }
   const before = (await p.getByTestId('hud-tokens').textContent())?.trim();
   for (let i = 0; i < 5; i++) await p.getByTestId('agent-hit').click();
   await p.waitForTimeout(600);
@@ -50,6 +58,7 @@ await p.screenshot({ path: 'artifacts/livecheck.png' });
 const isDev = /:5185\b/.test(URL);
 console.log('url     :', URL);
 console.log('title   :', title ? 'yes' : 'NO');
+console.log('tour    :', tour);
 console.log('played  :', played ? 'clicks generate tokens' : 'NO: the wallet did not move');
 console.log(
   'hooks   :',
