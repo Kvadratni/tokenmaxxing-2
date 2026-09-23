@@ -121,9 +121,9 @@ describe('collecting', () => {
     const s = mkSim();
     s.run.promptIndex = 2;
     grab(s, 'golden_token');
-    expect(s.run.tokens).toBeCloseTo(0.2 * promptAt(2).requirement, 8);
+    expect(s.run.tokens).toBeCloseTo(0.03 * promptAt(2).requirement, 8);
     grab(s, 'a_bug');
-    expect(s.run.tokens).toBeCloseTo(0.3 * promptAt(2).requirement, 8);
+    expect(s.run.tokens).toBeCloseTo(0.045 * promptAt(2).requirement, 8);
   });
 
   it('Cache Hit frees a fifth of the window, never below the floor', () => {
@@ -142,7 +142,7 @@ describe('collecting', () => {
     const max = s.patienceMaxMs;
     s.run.patienceMs = max / 2;
     grab(s, 'thanks_note');
-    expect(s.run.patienceMs).toBeCloseTo(max * 0.7, 6);
+    expect(s.run.patienceMs).toBeCloseTo(max * 0.55, 6);
   });
 
   it('buffs run as good incidents, and refresh rather than stack', () => {
@@ -155,7 +155,7 @@ describe('collecting', () => {
     s.tick(2000);
     grab(s, 'stack_overflow');
     expect(s.run.incidents).toHaveLength(1);
-    expect(s.run.incidents[0]?.remainingMs).toBe(8_000);
+    expect(s.run.incidents[0]?.remainingMs).toBe(6_000);
     grab(s, 'documentation');
     expect(s.derived().multipliers.idle).toBe(2);
   });

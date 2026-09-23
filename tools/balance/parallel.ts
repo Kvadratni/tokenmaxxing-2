@@ -16,6 +16,8 @@ import type { MetaState } from '@sim/types.ts';
 import type { ClickModel, PolicyId, PolicyOptions } from './policy.ts';
 import type { CareerResult } from './meta.ts';
 import { career } from './meta.ts';
+import type { DiagJob } from './diag.ts';
+import { playDiag } from './diag.ts';
 import type { RunResult } from './run.ts';
 import { runOne } from './run.ts';
 
@@ -61,6 +63,46 @@ export function runShard(jobFile: string, index: number, count: number, outFile:
     if (job) out.push(playJob(job));
   }
   writeFileSync(outFile, JSON.stringify(out), 'utf8');
+}
+
+/** Worker entry for instrumented runs (diag.ts): play every `count`-th job starting at `index`. */
+export function runDiagShard(jobFile: string, index: number, count: number, outFile: string): void {
+  const jobs = JSON.parse(readFileSync(jobFile, 'utf8')) as DiagJob[];
+  const out: ReturnType<typeof playDiag>[] = [];
+  for (let i = index; i < jobs.length; i += count) {
+    const job = jobs[i];
+    if (job) out.push(playDiag(job));
+  }
+  writeFileSync(outFile, JSON.stringify(out), 'utf8');
+}
+
+/** Play instrumented jobs, in parallel when `workers > 1`. Results come back grouped by key, in seed order. */
+export async function runDiagJobs(jobs: readonly DiagJob[], workers: number): Promise<Map<string, unknown[]>> {
+  let results: ReturnType<typeof playDiag>[];
+  if (workers <= 1 || jobs.length < 4) {
+    results = jobs.map(playDiag);
+  } else {
+    const dir = mkdtempSync(join(tmpdir(), 'tm2-diag-'));
+    try {
+      const jobFile = join(dir, 'jobs.json');
+      writeFileSync(jobFile, JSON.stringify(jobs), 'utf8');
+      const n = Math.min(workers, jobs.length);
+      await spawnWorkers('diag-shard', jobFile, dir, n);
+      results = [];
+      for (let i = 0; i < n; i++) results.push(...(JSON.parse(readFileSync(join(dir, `out-${i}.json`), 'utf8')) as typeof results));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const order = new Map(jobs.map((j, i) => [`${j.key}#${j.seed}`, i]));
+  results.sort((a, b) => (order.get(`${a.key}#${a.seed}`) ?? 0) - (order.get(`${b.key}#${b.seed}`) ?? 0));
+  const out = new Map<string, unknown[]>();
+  for (const r of results) {
+    const list = out.get(r.key) ?? [];
+    list.push(r.out);
+    out.set(r.key, list);
+  }
+  return out;
 }
 
 /** Worker entry for careers: play every `count`-th career seed starting at `index`. */

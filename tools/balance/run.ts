@@ -29,6 +29,8 @@ export interface RunResult {
   readonly elapsedS: number;
   /** Sim seconds spent on each completed prompt, in order. */
   readonly promptSeconds: readonly number[];
+  /** Max patience of each completed prompt when it was completed, in seconds. */
+  readonly promptMaxS: readonly number[];
   readonly forcedCompactions: number;
   readonly manualCompactions: number;
   /** Forced compactions per prompt index (0-based). */
@@ -77,6 +79,8 @@ export interface RunConfig {
   readonly policyOptions?: PolicyOptions;
   /** Diagnostics: every sim event, with the sim that emitted it. */
   readonly onEvent?: (e: GameEvent, sim: Sim) => void;
+  /** Diagnostics: after every simulation step, with the step length in ms. */
+  readonly onStep?: (sim: Sim, stepMs: number) => void;
 }
 
 export const DEFAULT_STEP_MS = 200;
@@ -110,6 +114,7 @@ export function runOne(cfg: RunConfig): RunResult {
   if (meta.legacy === null) meta.legacy = { verdict: 'none' };
 
   const promptSeconds: number[] = [];
+  const promptMaxS: number[] = [];
   const forcedByPrompt: number[] = [];
   const manualByPrompt: number[] = [];
   const offered: CardId[] = [];
@@ -149,6 +154,7 @@ export function runOne(cfg: RunConfig): RunResult {
         const s = (sim.run.elapsedMs - promptStartMs) / 1000;
         promptSeconds.push(s);
         const base = sim.patienceMaxMs / 1000;
+        promptMaxS.push(base);
         if (base > 0) longestRatio = Math.max(longestRatio, s / base);
         break;
       }
@@ -260,6 +266,7 @@ export function runOne(cfg: RunConfig): RunResult {
     }
 
     sim.tick(stepMs);
+    cfg.onStep?.(sim, stepMs);
     const r = sim.run;
     if (!Number.isFinite(r.tokens) || r.tokens < -1e-6) invalid = true;
     if (!Number.isFinite(r.patienceMs) || !Number.isFinite(r.context)) invalid = true;
@@ -291,6 +298,7 @@ export function runOne(cfg: RunConfig): RunResult {
     endProgress: req > 0 ? Math.max(0, run.tokens) / req : 0,
     elapsedS: run.elapsedMs / 1000,
     promptSeconds,
+    promptMaxS,
     forcedCompactions: run.forcedCompactions,
     manualCompactions: run.compactions - run.forcedCompactions,
     forcedByPrompt,

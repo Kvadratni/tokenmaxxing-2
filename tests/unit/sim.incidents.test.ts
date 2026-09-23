@@ -3,6 +3,7 @@ import type { GameEvent, IncidentDef, MetaFeature, MetaState, ToolId } from '../
 import { BALANCE, INCIDENTS, INCIDENT_BY_ID, TOOL_IDS, promptAt } from '../../src/sim/content.ts';
 import type { IncidentPoolContext } from '../../src/sim/incidents.ts';
 import {
+  autoApprovedWeight,
   incidentCandidates,
   incidentEligible,
   incidentWeight,
@@ -153,6 +154,28 @@ describe('the pool', () => {
       });
       expect(pick?.permission ?? false).toBe(false);
     }
+  });
+
+  it('Auto Mode turns the permission share of bad rolls into quiet time', () => {
+    // Removing the prompts from the pool alone would hand their share to the
+    // other bad incidents; the player would get as many incidents as before.
+    const owned = tools({ bash: 5, web_search: 5, mcp_server: 5 });
+    const count = (features: Set<MetaFeature>): number => {
+      const rng = standaloneRng(7);
+      let fired = 0;
+      for (let i = 0; i < 4000; i++) {
+        const pick = selectIncident(rng, ctx({ features, tools: owned, promptIndex: 4 }), 0);
+        if (pick) fired += 1;
+        expect(features.has('autoMode') && pick?.permission).toBeFalsy();
+      }
+      return fired;
+    };
+    const asking = count(new Set<MetaFeature>());
+    const auto = count(new Set<MetaFeature>(['autoMode']));
+    expect(asking).toBe(4000);
+    expect(auto).toBeLessThan(asking * 0.85);
+    expect(autoApprovedWeight(ctx({ tools: owned, promptIndex: 4 }))).toBe(0);
+    expect(autoApprovedWeight(ctx({ features: new Set<MetaFeature>(['autoMode']), tools: owned, promptIndex: 4 }))).toBeGreaterThan(0);
   });
 
   it('skips incidents already running', () => {

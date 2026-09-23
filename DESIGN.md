@@ -39,8 +39,8 @@ Buying anything drops you further from reporting done.
 ### Human patience (the deadline)
 
 - Every prompt starts with a full patience bar, and it drains in real time.
-  Base 120 s, decaying 5% per prompt, the same curve as the first game's
-  deadline.
+  Base about 2 minutes, decaying 4% per prompt, close to the first game's
+  deadline curve.
 - At zero, **the human switches models** and the run is lost.
 - Patience is the only clock that ends a run, but unlike a deadline you can
   push it around:
@@ -108,8 +108,9 @@ Buying anything drops you further from reporting done.
 ## Tools (the agent ladder)
 
 Ten tiers, each with a cost curve, a rate, a per-tier cap and a **context
-footprint**. Each tier costs about 15× the last, the same step as a prompt's
-requirement, so a new tier arrives roughly once per prompt. Tiers 1–4 are available from run 1, and 5–10 are unlocked in
+footprint**. Each tier makes about 8× the last and costs about 11×, a little
+under a prompt's 15× requirement step, so a new tier arrives roughly once per
+prompt. Tiers 1–4 are available from run 1, and 5–10 are unlocked in
 Training. As in game 1, a tier is revealed once you own a few of the previous
 one.
 
@@ -127,8 +128,10 @@ one.
 | 10 | Recursive Self-Improvement | Writes its own successor. Sets the release date. | low |
 
 Tools marked *needs permission* can be hit by permission incidents, which stall
-that tool until you ask again (clicks). **Auto Mode** in Training removes
-permission prompts, and in exchange adds the `rm -rf` incident.
+that tool until you ask again (a few seconds of clicks). **Auto Mode** in
+Training approves them for you: a roll that would have been a permission prompt
+becomes quiet time, so the game gets calmer. In exchange, `rm -rf` joins the
+incident pool.
 
 ## Other in-run systems
 

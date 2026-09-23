@@ -19,6 +19,7 @@
 import type { MetaState, MetaUpgradeId } from '@sim/types.ts';
 import { META_BY_ID, META_UPGRADES, defaultMeta } from '@sim/index.ts';
 import type { ArmSpec, ArmStats } from './analysis.ts';
+import type { PolicyId, PolicyOptions } from './policy.ts';
 import { runArms } from './analysis.ts';
 import { EXCLUDED_FROM_MAXED, TRAINING_ORDER, metaForBudget } from './meta.ts';
 
@@ -144,6 +145,10 @@ export interface NodeWeightOptions {
   readonly seedCount?: number;
   readonly workers?: number;
   readonly only?: readonly MetaUpgradeId[];
+  /** Who plays every arm. The competent bot by default; `careless` asks who a node rescues. */
+  readonly policy?: PolicyId;
+  /** Applied to every arm's bot (see PolicyOptions.override). */
+  readonly policyOptions?: PolicyOptions;
   /**
    * Nodes judged weak or dead get their mid toggle re-run with this many
    * seeds (a different seed list), and are judged again on the merged data.
@@ -155,6 +160,8 @@ export interface NodeWeightOptions {
 export async function nodeWeights(opts: NodeWeightOptions = {}): Promise<NodeReport[]> {
   const seedCount = opts.seedCount ?? 96;
   const workers = opts.workers ?? 1;
+  const policy: PolicyId = opts.policy ?? 'competent';
+  const po = opts.policyOptions ? { policyOptions: opts.policyOptions } : {};
   const mid = metaForBudget('mid').meta;
   const maxed = metaForBudget('maxed').meta;
   const nodes = META_UPGRADES.filter(
@@ -162,21 +169,22 @@ export async function nodeWeights(opts: NodeWeightOptions = {}): Promise<NodeRep
   );
 
   const arms: ArmSpec[] = [
-    { label: 'mid', policy: 'competent', meta: mid, metaName: 'mid' },
-    { label: 'maxed', policy: 'competent', meta: maxed, metaName: 'maxed' },
+    { label: 'mid', policy, meta: mid, metaName: 'mid', ...po },
+    { label: 'maxed', policy, meta: maxed, metaName: 'maxed', ...po },
   ];
   for (const def of nodes) {
     const pre = prefixBefore(def.id);
-    arms.push({ label: `pre:${def.id}`, policy: 'competent', meta: pre, metaName: 'purchase' });
-    arms.push({ label: `pre+${def.id}`, policy: 'competent', meta: withLevel(pre, def.id, def.maxLevel), metaName: 'purchase' });
+    arms.push({ label: `pre:${def.id}`, policy, meta: pre, metaName: 'purchase', ...po });
+    arms.push({ label: `pre+${def.id}`, policy, meta: withLevel(pre, def.id, def.maxLevel), metaName: 'purchase', ...po });
     const owned = (mid.levels[def.id] ?? 0) > 0;
     arms.push({
       label: `mid~${def.id}`,
-      policy: 'competent',
+      policy,
       meta: withLevel(mid, def.id, owned ? 0 : def.maxLevel),
       metaName: 'mid',
+      ...po,
     });
-    arms.push({ label: `maxed-${def.id}`, policy: 'competent', meta: withLevel(maxed, def.id, 0), metaName: 'maxed' });
+    arms.push({ label: `maxed-${def.id}`, policy, meta: withLevel(maxed, def.id, 0), metaName: 'maxed', ...po });
   }
   const stats = new Map((await runArms(arms, seedCount, workers)).map((s) => [s.label, s]));
   const get = (k: string): ArmStats => {
@@ -197,12 +205,12 @@ export async function nodeWeights(opts: NodeWeightOptions = {}): Promise<NodeRep
   const again = first.filter((n) => n.verdict === 'weak' || n.verdict === 'dead');
   if (followUp <= 0 || again.length === 0) return first;
   // A fresh seed list, so the follow-up is independent evidence.
-  const more: ArmSpec[] = [{ label: 'mid', policy: 'competent', meta: mid, metaName: 'mid' }];
+  const more: ArmSpec[] = [{ label: 'mid', policy, meta: mid, metaName: 'mid', ...po }];
   for (const n of again) {
     const def = META_BY_ID[n.id];
     if (!def) continue;
     const owned = (mid.levels[n.id] ?? 0) > 0;
-    more.push({ label: `mid~${n.id}`, policy: 'competent', meta: withLevel(mid, n.id, owned ? 0 : def.maxLevel), metaName: 'mid' });
+    more.push({ label: `mid~${n.id}`, policy, meta: withLevel(mid, n.id, owned ? 0 : def.maxLevel), metaName: 'mid', ...po });
   }
   const second = new Map((await runArms(more, followUp, workers, 10_000)).map((s) => [s.label, s]));
   return first.map((n) => {

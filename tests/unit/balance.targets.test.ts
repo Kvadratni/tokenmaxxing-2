@@ -6,7 +6,11 @@
  * purpose: they catch a retune that breaks a target, not a 5% drift.
  */
 import { describe, expect, it } from 'vitest';
+import { INCIDENTS, PICKUPS, PICKUP_BUFFS } from '../../src/sim/content.ts';
 import { sycophancyCases } from '../../tools/balance/analysis.ts';
+import type { TierRun } from '../../tools/balance/diag.ts';
+import { playDiag } from '../../tools/balance/diag.ts';
+import { HUMAN_CLICKS, averageCps } from '../../tools/balance/policy.ts';
 import type { MetaStateName } from '../../tools/balance/meta.ts';
 import { maxedCost, metaForBudget, orderProblems } from '../../tools/balance/meta.ts';
 import type { PolicyId } from '../../tools/balance/policy.ts';
@@ -86,4 +90,51 @@ describe('balance targets', () => {
       expect(c.measuredStretch).toBeLessThan(5);
     }
   }, SLOW);
+
+  it('Ralph Loop and Recursive Self-Improvement pay back within about two prompts of becoming affordable', () => {
+    for (const state of ['mid', 'maxed'] as const) {
+      const meta = metaForBudget(state).meta;
+      const runs = seeds(4, 500).map(
+        (seed) => playDiag({ key: state, kind: 'tiers', seed, policy: 'competent', meta, metaName: state }).out as TierRun,
+      );
+      for (const id of ['ralph_loop', 'rsi'] as const) {
+        const traces = runs.flatMap((r) => r.tiers.filter((t) => t.id === id));
+        // A maxed save always reaches the top of the ladder; most mid runs do.
+        expect(traces.length).toBeGreaterThanOrEqual(state === 'maxed' ? 4 : 3);
+        for (const t of traces) {
+          // One unit's price over its output when it first became affordable, in prompts.
+          expect(t.instPaybackS / t.promptLenS).toBeLessThan(2);
+        }
+        // It typically becomes affordable with a prompt or more to go, not on the
+        // final stretch. A median, because one unlucky seed can land it late.
+        const firsts = traces.map((t) => t.firstPos).sort((x, y) => x - y);
+        expect(firsts[Math.floor(firsts.length / 2)]).toBeLessThan(9);
+        // A player who unlocked it wants it.
+        expect(traces.filter((t) => t.boughtPos !== null).length).toBeGreaterThanOrEqual(traces.length - 1);
+      }
+    }
+  }, SLOW);
+
+  it('pickups are a bonus: no common pickup is a big lump of tokens or patience', () => {
+    // Lucky Tokens' rare pickups displace a share of the common ones, so a
+    // common payout big enough to carry a run would make Lucky Tokens a loss.
+    for (const p of PICKUPS) {
+      const a = p.action;
+      if (a.t === 'tokens') expect(a.ofRequirement).toBeLessThanOrEqual(0.05);
+      if (a.t === 'patience') expect(a.ofMax).toBeLessThanOrEqual(0.1);
+    }
+    for (const b of PICKUP_BUFFS) expect(b.durationMs).toBeLessThanOrEqual(20_000);
+  });
+
+  it('Auto Mode is worth buying because the game gets quieter, not because prompts are cruel', () => {
+    // Under Auto Mode a roll that lands on a permission prompt becomes quiet
+    // time (src/sim/incidents.ts, autoApprovedWeight). So the prompts can stay
+    // humane: a human clears any of them in a few seconds of clicking.
+    for (const p of INCIDENTS.filter((i) => i.permission)) {
+      expect(p.clearWithClicks, p.id).toBeDefined();
+      const clearS = (p.clearWithClicks ?? 0) / averageCps(HUMAN_CLICKS);
+      expect(clearS, `${p.id} takes ${clearS.toFixed(1)}s of clicking`).toBeLessThanOrEqual(10);
+      expect(p.durationMs, p.id).toBeLessThanOrEqual(60_000);
+    }
+  });
 });

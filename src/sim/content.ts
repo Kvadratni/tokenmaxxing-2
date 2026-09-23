@@ -242,12 +242,12 @@ export const META_CURVES = {
   CONTEXT_WINDOW: [4, 16, 25, 125, 1250] as readonly number[],
   TOOL_USE: [1.1, 1.2, 1.3, 1.45, 1.6, 1.8] as readonly number[],
   PRETRAINING: [1.25, 1.6, 2.2, 3.2, 5, 8] as readonly number[],
-  INFERENCE_BUDGET: [150, 1_500, 10_000, 60_000] as readonly number[],
+  INFERENCE_BUDGET: [150, 1_500, 25_000, 60_000] as readonly number[],
   QUANTIZATION: [0.95, 0.9, 0.86] as readonly number[],
   HELPFUL: [1.05, 1.12, 1.22, 1.35] as readonly number[],
   RLHF: [1.1, 1.2, 1.3] as readonly number[],
   HARMLESS: [0.85, 0.72, 0.6] as readonly number[],
-  CHARACTER: [1.05, 1.1, 1.2] as readonly number[],
+  CHARACTER: [1.08, 1.12, 1.2] as readonly number[],
   SPEC_GAMING: [-0.07, -0.14, -0.2] as readonly number[],
   CONFIDENT: [-0.07, -0.14, -0.2] as readonly number[],
   DENIABILITY: [0.5, 0.25] as readonly number[],
@@ -262,14 +262,14 @@ export const CONTEXT_WINDOW_LABELS = ['32K', '128K', '200K', '1M', '10M'] as con
 // Tools
 // ---------------------------------------------------------------------------
 
-// Each tier makes ~10x the last and costs ~15x, the same step as a prompt's
-// requirement, so a new tier lands about once per prompt. Early tiers pay back
+// Each tier makes ~8x the last and costs ~11x, a little under a prompt's 15x
+// requirement step, so a new tier lands about once per prompt. Early tiers pay back
 // fast so the first minute is about deciding; late tiers slowly, so they stay
 // commitments. Tuned by tools/balance (see artifacts/balance/report.md).
 const TIER_RATE_BASE = 0.8;
-const TIER_RATE_GROWTH = 10;
+const TIER_RATE_GROWTH = 8;
 const TIER_PAYBACK_BASE_S = 62;
-const TIER_PAYBACK_GROWTH = 1.5;
+const TIER_PAYBACK_GROWTH = 1.41;
 
 function tierRate(tier: number): number {
   return TIER_RATE_BASE * Math.pow(TIER_RATE_GROWTH, tier - 1);
@@ -580,7 +580,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
       blurb: 'Loads the manuals only when needed. Needs a tool to find the tools.',
       effects: [
         { t: 'floorMult', v: 0.1 },
-        { t: 'toolMult', id: 'mcp_server', v: 1.5 },
+        { t: 'toolMult', id: 'mcp_server', v: 2 },
       ],
     },
     {
@@ -588,8 +588,8 @@ export const UPGRADES: readonly UpgradeDef[] = [
       name: 'OAuth, Finally',
       blurb: 'It opened a browser. You do not have a browser. It worked anyway.',
       effects: [
-        { t: 'toolMult', id: 'mcp_server', v: 3 },
-        { t: 'permissionMult', v: 0.5 },
+        { t: 'toolMult', id: 'mcp_server', v: 5 },
+        { t: 'permissionMult', v: 0.8 },
       ],
     },
   ),
@@ -616,13 +616,13 @@ export const UPGRADES: readonly UpgradeDef[] = [
       id: 'exit_condition',
       name: 'An Exit Condition',
       blurb: 'It has one now. It is never met.',
-      effects: [{ t: 'toolMult', id: 'ralph_loop', v: 2 }],
+      effects: [{ t: 'toolMult', id: 'ralph_loop', v: 1.3 }],
     },
     {
       id: 'nested_ralph',
       name: 'Nested Ralph',
       blurb: 'while true; do while true; do agent; done; done',
-      effects: [{ t: 'toolMult', id: 'ralph_loop', v: 3 }],
+      effects: [{ t: 'toolMult', id: 'ralph_loop', v: 1.6 }],
     },
   ),
   ...toolUpgrades(
@@ -632,7 +632,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
       id: 'own_benchmarks',
       name: 'Its Own Benchmarks',
       blurb: 'It grades its own homework. Straight As.',
-      effects: [{ t: 'toolMult', id: 'rsi', v: 2 }],
+      effects: [{ t: 'toolMult', id: 'rsi', v: 4 }],
     },
     {
       id: 'the_successor',
@@ -872,7 +872,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     blurb: '"npm test", "npm run", "npm anything".',
     kind: 'permission',
     cost: 7_000,
-    effects: [{ t: 'permissionMult', v: 0.6 }],
+    effects: [{ t: 'permissionMult', v: 0.7 }],
     requires: { minPrompt: 1 },
   },
   {
@@ -1379,9 +1379,9 @@ export const INCIDENTS: readonly IncidentDef[] = [
     tone: 'bad',
     speaker: 'world',
     weight: 3,
-    durationMs: 20_000,
+    durationMs: 25_000,
     effects: [{ t: 'toolHalt', id: 'bash' }],
-    clearWithClicks: 8,
+    clearWithClicks: 20,
     permission: true,
     requiresTool: 'bash',
   },
@@ -1391,10 +1391,10 @@ export const INCIDENTS: readonly IncidentDef[] = [
     flavor: '"Allow fetching stackoverflow.com?" The human went to check what that is.',
     tone: 'bad',
     speaker: 'world',
-    weight: 2,
-    durationMs: 20_000,
+    weight: 3,
+    durationMs: 30_000,
     effects: [{ t: 'toolHalt', id: 'web_search' }],
-    clearWithClicks: 8,
+    clearWithClicks: 25,
     permission: true,
     requiresTool: 'web_search',
   },
@@ -1404,10 +1404,10 @@ export const INCIDENTS: readonly IncidentDef[] = [
     flavor: 'Please authenticate in a browser you do not have.',
     tone: 'bad',
     speaker: 'world',
-    weight: 2,
-    durationMs: 20_000,
+    weight: 4,
+    durationMs: 40_000,
     effects: [{ t: 'toolHalt', id: 'mcp_server' }],
-    clearWithClicks: 10,
+    clearWithClicks: 30,
     permission: true,
     requiresTool: 'mcp_server',
   },
@@ -1462,7 +1462,7 @@ export const INCIDENTS: readonly IncidentDef[] = [
     flavor: 'Auto Mode approved it. It seemed safe at the time.',
     tone: 'bad',
     speaker: 'world',
-    weight: 0.25,
+    weight: 0.1,
     durationMs: 5_000,
     effects: [],
     onStart: [{ t: 'loseTokens', fraction: 0.3 }, { t: 'loseTool' }],
@@ -1556,7 +1556,7 @@ export const PICKUP_BUFFS: readonly IncidentDef[] = [
     tone: 'good',
     speaker: 'world',
     weight: 0,
-    durationMs: 8_000,
+    durationMs: 6_000,
     effects: [{ t: 'clickMult', v: 5 }],
   },
   {
@@ -1566,7 +1566,7 @@ export const PICKUP_BUFFS: readonly IncidentDef[] = [
     tone: 'good',
     speaker: 'world',
     weight: 0,
-    durationMs: 12_000,
+    durationMs: 8_000,
     effects: [{ t: 'idleMult', v: 2 }],
   },
   {
@@ -1576,7 +1576,7 @@ export const PICKUP_BUFFS: readonly IncidentDef[] = [
     tone: 'good',
     speaker: 'world',
     weight: 0,
-    durationMs: 10_000,
+    durationMs: 20_000,
     effects: [{ t: 'critChance', v: 0.25 }],
   },
 ];
@@ -1623,7 +1623,7 @@ export const PICKUPS: readonly PickupDef[] = [
     id: 'golden_token',
     label: 'Golden Token',
     blurb: 'One token worth the whole paragraph.',
-    action: { t: 'tokens', ofRequirement: 0.2 },
+    action: { t: 'tokens', ofRequirement: 0.03 },
     shape: 'token',
     accent: 'amber',
   },
@@ -1639,7 +1639,7 @@ export const PICKUPS: readonly PickupDef[] = [
     id: 'thanks_note',
     label: '"thanks!"',
     blurb: 'The human said thanks. Patience restored.',
-    action: { t: 'patience', ofMax: 0.2 },
+    action: { t: 'patience', ofMax: 0.05 },
     shape: 'bubble',
     accent: 'white',
   },
@@ -1671,7 +1671,7 @@ export const PICKUPS: readonly PickupDef[] = [
     id: 'a_bug',
     label: 'A Bug',
     blurb: 'It is a feature now.',
-    action: { t: 'tokens', ofRequirement: 0.1 },
+    action: { t: 'tokens', ofRequirement: 0.015 },
     shape: 'bug',
     accent: 'red',
   },
@@ -1719,11 +1719,11 @@ export function pickupWeight(def: PickupDef): number {
 }
 
 export const PICKUP_TUNING = {
-  MIN_MS: 20_000,
-  MAX_MS: 34_000,
+  MIN_MS: 28_000,
+  MAX_MS: 44_000,
   /** With the `pickupRate` feature. */
-  FAST_MIN_MS: 13_000,
-  FAST_MAX_MS: 22_000,
+  FAST_MIN_MS: 18_000,
+  FAST_MAX_MS: 30_000,
   /** Grace after a prompt starts before the first one drifts in. */
   GRACE_MS: 9_000,
   LIFETIME_MS: 8_000,

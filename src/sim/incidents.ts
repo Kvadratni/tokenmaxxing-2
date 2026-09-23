@@ -8,7 +8,9 @@
  *
  * New for the sequel: the pool is filtered by Training features (Auto Mode
  * removes permission prompts and adds rm -rf), by what the player owns, and
- * permission prompts are weighted by `permissionMult`.
+ * permission prompts are weighted by `permissionMult`. Under Auto Mode the
+ * prompts' share of the bad rolls becomes quiet time rather than other
+ * incidents.
  */
 import type { ActiveIncident, IncidentDef, IncidentId, MetaFeature, ToolId } from './types.ts';
 import { BALANCE, INCIDENTS, INCIDENT_BY_ID, TOOL_IDS } from './content.ts';
@@ -86,9 +88,37 @@ export function incidentWeight(def: IncidentDef, ctx: Pick<IncidentPoolContext, 
   return Number.isFinite(w) && w > 0 ? w : 0;
 }
 
+/** A bad roll Auto Mode swallowed: the prompt was approved without asking. */
+const AUTO_APPROVED: unique symbol = Symbol('autoApproved');
+
+/**
+ * The weight the permission prompts would have had if Auto Mode were off.
+ *
+ * Auto Mode must make the game quieter, not just differently noisy. Filtering
+ * the prompts out of the pool alone hands their share of every bad roll to
+ * the other bad incidents, so the player got exactly as many incidents as
+ * before and paid for rm -rf on top. Instead the prompts' share becomes quiet
+ * time: the roll lands, Auto Mode approves it, nothing happens.
+ */
+export function autoApprovedWeight(ctx: IncidentPoolContext): number {
+  if (!ctx.features.has('autoMode')) return 0;
+  const asking: IncidentPoolContext = {
+    ...ctx,
+    features: new Set([...ctx.features].filter((f) => f !== 'autoMode')),
+  };
+  let w = 0;
+  for (const def of INCIDENTS) {
+    if (def.tone === 'bad' && def.permission && incidentEligible(def, asking)) {
+      w += incidentWeight(def, asking);
+    }
+  }
+  return w;
+}
+
 /**
  * Pick the tone bucket, then a weighted incident inside it. Consumes exactly
- * one RNG draw for the tone and at most one for the pick.
+ * one RNG draw for the tone and at most one for the pick. Under Auto Mode a
+ * bad pick can come back empty (see `autoApprovedWeight`).
  */
 export function selectIncident(
   rng: Rng,
@@ -96,7 +126,11 @@ export function selectIncident(
   goodChance: number = BALANCE.GOOD_INCIDENT_CHANCE,
 ): IncidentDef | undefined {
   const tone: 'bad' | 'good' = rng.nextFloat() < goodChance ? 'good' : 'bad';
-  return rng.weightedPick(incidentCandidates(tone, ctx), (d) => incidentWeight(d, ctx));
+  const quiet = tone === 'bad' ? autoApprovedWeight(ctx) : 0;
+  const pool: (IncidentDef | typeof AUTO_APPROVED)[] = incidentCandidates(tone, ctx);
+  if (quiet > 0) pool.push(AUTO_APPROVED);
+  const pick = rng.weightedPick(pool, (d) => (d === AUTO_APPROVED ? quiet : incidentWeight(d, ctx)));
+  return pick === AUTO_APPROVED ? undefined : pick;
 }
 
 /**

@@ -211,6 +211,12 @@ export interface PolicyOptions {
   readonly banCards?: readonly CardId[];
   /** Cards the bot drafts the moment they are offered. */
   readonly forceCards?: readonly CardId[];
+  /** Overrides the policy's chance of clicking a drifting pickup (0 ignores them all). */
+  readonly pickupChance?: number;
+  /** Pickups the bot never clicks, whatever its chance. */
+  readonly skipPickups?: readonly string[];
+  /** Replace parts of the policy, e.g. a competent player who never /compacts. */
+  readonly override?: Partial<Omit<PolicyConfig, 'id'>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,8 +395,10 @@ function permissionShare(d: DerivedStats): number {
 /**
  * Effective tokens/s gained by moving from `b` to `a`. With `smart` off only
  * raw production counts, which is how a careless player reads the shop.
+ * `permissions` is false once Auto Mode has removed permission prompts: an
+ * allowlist then has nothing left to allow.
  */
-export function gainOf(b: View, a: View, smart: boolean, claims: boolean): number {
+export function gainOf(b: View, a: View, smart: boolean, claims: boolean, permissions = true): number {
   if (!smart) return a.e.rate - b.e.rate;
   const base = Math.max(b.e.eff, 1e-9);
   let g = a.e.eff - b.e.eff;
@@ -410,7 +418,7 @@ export function gainOf(b: View, a: View, smart: boolean, claims: boolean): numbe
 
   // Incidents cost output; permission prompts only halt their own tool.
   g -= base * JUDGEMENT.INCIDENT_COST * (a.d.incidentRateMult - b.d.incidentRateMult);
-  if (b.agg.permissionMult > 0) {
+  if (permissions && b.agg.permissionMult > 0) {
     g +=
       base * JUDGEMENT.PERMISSION_COST * permissionShare(b.d) * (1 - a.agg.permissionMult / b.agg.permissionMult);
   }
@@ -460,6 +468,7 @@ export function enumerateCandidates(
   const wallet = Math.max(0, sim.run.tokens);
   const reach = Math.max(wallet, v.d.requirement) * JUDGEMENT.REACH;
   const claims = cfg.claim !== 'never';
+  const permissions = !unlockedOf(sim).features.has('autoMode');
   const out: Candidate[] = [];
 
   if (cfg.buyTools) {
@@ -499,7 +508,7 @@ export function enumerateCandidates(
       if (def.cost > reach || ban?.has(def.id)) continue;
       const run1 = withUpgrade(v.run, def.id);
       const a = viewOf(run1, meta, p);
-      const gain = gainOf(v, a, cfg.smartValue, claims);
+      const gain = gainOf(v, a, cfg.smartValue, claims, permissions);
       if (!(gain > 0)) continue;
       out.push({
         kind: 'upgrade',
@@ -620,11 +629,14 @@ export function makeBot(
   seed: number,
   opts: PolicyOptions = {},
 ): Bot {
-  const cfg: PolicyConfig = typeof policy === 'string' ? POLICIES[policy] : policy;
+  const base: PolicyConfig = typeof policy === 'string' ? POLICIES[policy] : policy;
+  const cfg: PolicyConfig = opts.override ? { ...base, ...opts.override } : base;
   const cps = averageCps(clicks);
   const banUpgrades = opts.banUpgrades && opts.banUpgrades.length > 0 ? new Set(opts.banUpgrades) : null;
   const banCards = opts.banCards && opts.banCards.length > 0 ? new Set(opts.banCards) : null;
   const forceCards = opts.forceCards && opts.forceCards.length > 0 ? new Set(opts.forceCards) : null;
+  const pickupChance = opts.pickupChance ?? cfg.pickupChance;
+  const skipPickups = opts.skipPickups && opts.skipPickups.length > 0 ? new Set(opts.skipPickups) : null;
   const dice = botRng(seed);
   let pickupSeen: object | null = null;
   let pickupWanted = false;
@@ -800,7 +812,7 @@ export function makeBot(
     }
     if (pickupSeen !== pk) {
       pickupSeen = pk;
-      pickupWanted = dice() < cfg.pickupChance;
+      pickupWanted = dice() < pickupChance && !skipPickups?.has(pk.id);
     }
     // A human needs a moment to notice it and move the mouse.
     if (pickupWanted && pk.ageS >= 0.9) {
