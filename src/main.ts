@@ -15,7 +15,7 @@ import type { GameEvent, SceneKey, Settings } from './sim/types.ts';
 import { createRenderer } from './render/index.ts';
 import type { SceneRenderer } from './render/index.ts';
 import { AGENT_RECT } from './render/atlas-types.ts';
-import { attachUnlockOnFirstGesture, createAudioEngine, tensionFor } from './audio/index.ts';
+import { attachUnlockOnFirstGesture, contextFillFor, createAudioEngine, tensionFor } from './audio/index.ts';
 import { createUI } from './ui/index.ts';
 import { applySimAction } from './ui/actions.ts';
 import type { UIAction } from './ui/types.ts';
@@ -163,14 +163,21 @@ function boot(): void {
       audio.setScene(scene);
     }
     audio.setTension(ui.screen === 'run' ? tensionFor(derived) : 0);
+    // The score's pad opens up as the context window fills.
+    audio.setContextFill(ui.screen === 'run' ? contextFillFor(derived) : 0);
 
-    view.draw({
-      run: sim.run,
-      derived,
-      settings: sim.meta.settings,
-      dt: frameMs / 1000,
-      time: (now - t0) / 1000,
-    });
+    // The stage sits hidden under the title and Training screens; painting it
+    // there cost far more than the whole title backdrop (up to ~90% of a core
+    // under software compositing at 2x).
+    if (ui.screen === 'run') {
+      view.draw({
+        run: sim.run,
+        derived,
+        settings: sim.meta.settings,
+        dt: frameMs / 1000,
+        time: (now - t0) / 1000,
+      });
+    }
   }
   raf = requestAnimationFrame(frame);
 

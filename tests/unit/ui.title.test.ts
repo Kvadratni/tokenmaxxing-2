@@ -81,11 +81,15 @@ describe('title screen', () => {
     expect(must(m.root, TID.titleScreen).textContent).toContain(`Tokenmaxxing ${modelVersion(4)}`);
   });
 
-  it('keeps the CLI backdrop running behind the title, and only there', () => {
+  it('keeps the neural net backdrop behind the title, and only there', () => {
     const m = mountUI({ screen: 'title' });
-    const cli = must(m.root, TID.cliBackdrop);
-    expect(must(m.root, TID.titleScreen).contains(cli)).toBe(true);
-    expect(cli.querySelectorAll('.tm-cli__line').length).toBeGreaterThan(0);
+    const net = must(m.root, TID.netBackdrop);
+    expect(must(m.root, TID.titleScreen).contains(net)).toBe(true);
+    expect(net.getAttribute('aria-hidden')).toBe('true');
+    expect(net.querySelectorAll('canvas').length).toBeGreaterThan(0);
+    expect(m.root.querySelectorAll(`[data-testid="${TID.netBackdrop}"]`)).toHaveLength(1);
+    // It is the title's first child, so everything in the menu paints over it.
+    expect(must(m.root, TID.titleScreen).firstElementChild).toBe(net);
   });
 });
 

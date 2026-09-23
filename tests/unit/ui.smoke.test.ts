@@ -44,8 +44,10 @@ describe('the shell', () => {
     // Cards exist only while their dialog is open; ui.draft, ui.summary and
     // ui.modals cover those.
     const openOnly = new Set<string>([TID.draftCard, TID.summaryCard, TID.achievementPopupCard]);
+    const RETIRED = new Set<string>([TID.cliBackdrop]);
     for (const id of Object.values(TID)) {
       if (id === TID.app || openOnly.has(id)) continue; // app is stamped on the host's root
+      if (RETIRED.has(id)) continue; // kept in TID (never removed), rendered nowhere
       const found = SCOPED.has(id)
         ? m.root.querySelector(`[data-testid="${id}"], [data-testid^="${id}-"]`)
         : q(m.root, id);

@@ -148,8 +148,13 @@ export const TID = {
   coach: 'coach',
   coachTip: 'coach-tip',
   coachDismiss: 'coach-dismiss',
-  /** Ambient fake agent session behind the title screen. */
+  /** Retired: game 1's ambient CLI session. Kept only because TIDs never get removed. */
   cliBackdrop: 'cli-backdrop',
+  /**
+   * The title backdrop: a neural net mid-RLHF run. Prompts in on the left,
+   * answers out on the right, reward flowing back.
+   */
+  netBackdrop: 'net-backdrop',
 
   // options / debug
   optionsButton: 'options-button',

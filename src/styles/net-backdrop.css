@@ -1,0 +1,49 @@
+/*
+ * The neural net behind the title: styles for `src/ui/net-backdrop.ts`.
+ *
+ * Owns exactly these names: .tm-net-host, .tm-net, .tm-net__canvas. Nothing
+ * here selects another module's class.
+ *
+ * Stacking: `.tm-net` is `z-index: -1`, so it paints *above* the mount
+ * parent's own background and *below* every in-flow child of that parent,
+ * which is why the title copy and buttons always win. That only holds if the
+ * parent establishes a stacking context, so the host puts `.tm-net-host` on
+ * it. `.tm-screen` already qualifies (positioned, z-index 20); the class is a
+ * no-op there and a requirement everywhere else.
+ *
+ * The parent must also be positioned (`.tm-screen` is `position: absolute`).
+ * `.tm-net-host` deliberately does NOT set `position`: it has the same
+ * specificity as `.tm-screen` and would win the cascade and break the overlay.
+ */
+
+.tm-net-host {
+  isolation: isolate;
+}
+
+.tm-net {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  /* Non-negotiable: the title buttons sit on top of this. */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* The backdrop never influences anything outside its own box. */
+  contain: strict;
+}
+
+/*
+ * One low-resolution canvas. The module sizes its backing store in canvas
+ * pixels and its CSS box in whole multiples of them (never wider than the
+ * host), so every canvas pixel lands on the same number of device pixels.
+ */
+.tm-net__canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}

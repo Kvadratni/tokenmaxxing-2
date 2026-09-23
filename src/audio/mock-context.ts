@@ -16,16 +16,30 @@ export interface ParamCall {
 }
 
 export class MockAudioParam {
-  value: number;
+  private current: number;
   readonly calls: ParamCall[] = [];
+  /** Nodes connected into this param (an FM modulator's depth gain, say). */
+  readonly inputs: MockAudioNode[] = [];
+  /** Every value assigned straight to `.value`, in order (automation excluded). */
+  readonly directSets: number[] = [];
 
   constructor(value = 0) {
-    this.value = value;
+    this.current = value;
+  }
+
+  /** The settled value: the last direct set or automation target. */
+  get value(): number {
+    return this.current;
+  }
+
+  set value(v: number) {
+    this.current = v;
+    this.directSets.push(v);
   }
 
   private record(method: string, args: number[], settled?: number): this {
     this.calls.push({ method, args });
-    if (settled !== undefined) this.value = settled;
+    if (settled !== undefined) this.current = settled;
     return this;
   }
 
@@ -57,20 +71,32 @@ export class MockAudioParam {
 export class MockAudioNode {
   readonly kind: string;
   readonly outputs: MockAudioNode[] = [];
+  /** Params this node modulates (connect(param) targets). */
+  readonly paramOutputs: MockAudioParam[] = [];
   disconnectCount = 0;
 
   constructor(kind: string) {
     this.kind = kind;
   }
 
-  connect<T extends MockAudioNode>(dest: T): T {
-    this.outputs.push(dest);
+  connect<T extends MockAudioNode | MockAudioParam>(dest: T): T {
+    if (dest instanceof MockAudioParam) {
+      this.paramOutputs.push(dest);
+      dest.inputs.push(this);
+    } else {
+      this.outputs.push(dest);
+    }
     return dest;
   }
 
   disconnect(): void {
     this.disconnectCount++;
     this.outputs.length = 0;
+    for (const p of this.paramOutputs) {
+      const i = p.inputs.indexOf(this);
+      if (i >= 0) p.inputs.splice(i, 1);
+    }
+    this.paramOutputs.length = 0;
   }
 }
 
@@ -145,6 +171,31 @@ export class MockPanner extends MockAudioNode {
   }
 }
 
+export class MockWaveShaper extends MockAudioNode {
+  curve: Float32Array | null = null;
+  oversample: OverSampleType = 'none';
+  constructor() {
+    super('waveShaper');
+  }
+}
+
+export class MockConvolver extends MockAudioNode {
+  buffer: unknown = null;
+  normalize = true;
+  constructor() {
+    super('convolver');
+  }
+}
+
+export class MockDelay extends MockAudioNode {
+  readonly delayTime = new MockAudioParam(0);
+  readonly maxDelayTime: number;
+  constructor(maxDelayTime = 1) {
+    super('delay');
+    this.maxDelayTime = maxDelayTime;
+  }
+}
+
 export class MockCompressor extends MockAudioNode {
   readonly threshold = new MockAudioParam(-24);
   readonly knee = new MockAudioParam(30);
@@ -189,6 +240,9 @@ export interface MockCreated {
   readonly filters: MockBiquad[];
   readonly panners: MockPanner[];
   readonly compressors: MockCompressor[];
+  readonly shapers: MockWaveShaper[];
+  readonly convolvers: MockConvolver[];
+  readonly delays: MockDelay[];
   readonly buffers: MockAudioBuffer[];
   readonly periodicWaves: unknown[];
 }
@@ -210,6 +264,9 @@ export class MockAudioContext {
     filters: [],
     panners: [],
     compressors: [],
+    shapers: [],
+    convolvers: [],
+    delays: [],
     buffers: [],
     periodicWaves: [],
   };
@@ -250,6 +307,24 @@ export class MockAudioContext {
     return n;
   }
 
+  createWaveShaper(): MockWaveShaper {
+    const n = new MockWaveShaper();
+    this.created.shapers.push(n);
+    return n;
+  }
+
+  createConvolver(): MockConvolver {
+    const n = new MockConvolver();
+    this.created.convolvers.push(n);
+    return n;
+  }
+
+  createDelay(maxDelayTime = 1): MockDelay {
+    const n = new MockDelay(maxDelayTime);
+    this.created.delays.push(n);
+    return n;
+  }
+
   createBuffer(channels: number, length: number, sampleRate: number): MockAudioBuffer {
     const b = new MockAudioBuffer(channels, length, sampleRate);
     this.created.buffers.push(b);
@@ -284,6 +359,24 @@ export class MockAudioContext {
   /** Every scheduled source ever created, oscillators and noise alike. */
   sources(): MockScheduledSource[] {
     return [...this.created.oscillators, ...this.created.bufferSources];
+  }
+
+  /**
+   * One entry per voice: the source whose `ended` frees it (an FM voice's
+   * carrier, a noise voice's buffer source). FM modulators are not voices.
+   */
+  voices(): MockScheduledSource[] {
+    return this.sources().filter((s) => s.onended !== null);
+  }
+
+  /** Oscillators that are FM carriers: something is driving their frequency. */
+  carriers(): MockOscillator[] {
+    return this.created.oscillators.filter((o) => o.frequency.inputs.length > 0);
+  }
+
+  /** Oscillators that are FM modulators: they drive a param, not a node. */
+  modulators(): MockOscillator[] {
+    return this.created.oscillators.filter((o) => o.outputs.some((g) => g.paramOutputs.length > 0));
   }
 
   /** Fire `onended` on every source whose stop time has passed. */

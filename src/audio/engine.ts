@@ -1,5 +1,6 @@
 /**
- * The `AudioEngine` implementation (see `src/sim/types.ts`).
+ * The `AudioEngine` implementation (see `src/sim/types.ts`), plus one additive
+ * input the frozen contract does not have yet: `setContextFill()`.
  *
  * Contract guarantees:
  *  - No `AudioContext` is constructed until `unlock()` runs, and `unlock()` is
@@ -12,9 +13,10 @@
  *    entirely at music volume 0.
  *
  * `handle()` is the game-to-audio mapping: it decides which sound an event
- * gets, and turns game values (sycophancy heat, context fill) into the 0..1
- * amounts `sfx.ts` synthesises from. Every sound it picks goes through the
- * public `play()`, so one set of gates covers them all.
+ * gets, and turns game values (sycophancy heat, context fill, who is speaking)
+ * into the amounts `sfx.ts` synthesises from. Every sound it picks goes
+ * through the public `play()`, so one set of gates covers them all, and the
+ * big moments dip the score under themselves on the way through.
  */
 
 import { BALANCE, INCIDENT_BY_ID } from '../sim/content.ts';
@@ -23,10 +25,11 @@ import {
   clamp01,
   createAudioBus,
   detectAudioContextFactory,
+  setParam,
   type AudioBus,
   type AudioContextFactory,
 } from './context.ts';
-import { createMusic, type MusicController } from './music.ts';
+import { createMusic, type MusicController, type MusicState, type MusicTimers } from './music.ts';
 import {
   createSfxPlayer,
   isStreakDriven,
@@ -34,7 +37,7 @@ import {
   type SfxParams,
   type SfxPlayer,
 } from './sfx.ts';
-import { saturate, VoicePool } from './synth.ts';
+import { reverbImpulse, saturate, VoicePool } from './synth.ts';
 
 /** Hard cap on simultaneous SFX voices. */
 export const SFX_VOICE_CAP = 24;
@@ -54,17 +57,45 @@ export const AUTO_CRIT_GAP_MS = 400;
 
 /** Incidents with a sound of their own, checked before the permission and tone rules. */
 export const INCIDENT_SFX: ReadonlyMap<IncidentId, SfxName> = new Map<IncidentId, SfxName>([
-  // "wait stop": the human breaks in mid-call. Glass, shattering.
+  // "wait stop": the human breaks in mid-call. The glass cracks.
   ['wait_stop', 'interrupt'],
 ]);
+
+/** Pickups that come from the human rather than the machine. */
+export const HUMAN_PICKUPS: ReadonlySet<string> = new Set(['thanks_note', 'thumbs_up']);
+
+/**
+ * How far, and for how long, the score dips under a sound: [depth 0..1,
+ * seconds held]. The rest of the SFX sit on top of the music as it is.
+ */
+export const MUSIC_DUCK: Readonly<Partial<Record<AnySfxName, readonly [number, number]>>> = {
+  report: [0.4, 0.9],
+  caught: [0.45, 0.6],
+  compactForced: [0.45, 0.9],
+  achievement: [0.3, 0.8],
+  win: [0.85, 2.6],
+  lose: [0.9, 2],
+};
+
+/** Level of the sfx bus's room reverb. */
+const SFX_SPACE_RETURN = 0.55;
+
+function ownIncident(id: IncidentId): (typeof INCIDENT_BY_ID)[string] | undefined {
+  return Object.prototype.hasOwnProperty.call(INCIDENT_BY_ID, id) ? INCIDENT_BY_ID[id] : undefined;
+}
 
 /** Which sound an incident opens with. */
 export function incidentSfx(id: IncidentId, tone: 'bad' | 'good'): SfxName {
   const own = INCIDENT_SFX.get(id);
   if (own) return own;
-  // Every permission prompt dings, whichever tool it stalls. Content flags them.
-  if (INCIDENT_BY_ID[id]?.permission === true) return 'permission';
+  // Every permission prompt chimes, whichever tool it stalls. Content flags them.
+  if (ownIncident(id)?.permission === true) return 'permission';
   return tone === 'good' ? 'incidentGood' : 'incidentBad';
+}
+
+/** Who an incident comes from: the human's lines ping like chat messages. */
+export function incidentSpeaker(id: IncidentId): 'human' | 'world' {
+  return ownIncident(id)?.speaker === 'human' ? 'human' : 'world';
 }
 
 /**
@@ -104,13 +135,47 @@ export interface AudioEngineOptions {
   readonly handleVisibility?: boolean;
   /** Scene to start the score on. Default 'bedroom'. */
   readonly scene?: SceneKey;
+  /**
+   * The music scheduler's interval. Default: the global timers. The offline
+   * renderer (tools/audio/render.mjs) injects its own and ticks by hand.
+   */
+  readonly timers?: MusicTimers;
+}
+
+/** A read-only snapshot of the engine, for dev tools (the soundboard) and tests. */
+export interface EngineState {
+  readonly unlocked: boolean;
+  readonly scene: SceneKey;
+  readonly tension: number;
+  readonly contextFill: number;
+  readonly volumes: { readonly music: number; readonly sfx: number };
+  /** SFX voices in flight. */
+  readonly sfxVoices: number;
+  /** The score's own snapshot, once unlocked. */
+  readonly music: MusicState | null;
+}
+
+/**
+ * The frozen `AudioEngine`, plus the score's context input. Optional on the
+ * interface, so any `AudioEngine` still fits wherever this is expected; the
+ * engine `createAudioEngine()` builds always has both.
+ */
+export interface GameAudioEngine extends AudioEngine {
+  /**
+   * How full the context window is, 0..1 (see `contextFillFor`). Opens the
+   * pad's low-pass as the window fills and brings a low pressure drone in
+   * above 80%. Call it every frame, like `setTension`.
+   */
+  setContextFill?(f: number): void;
+  /** Dev tooling: what the engine is doing right now. */
+  inspect?(): EngineState;
 }
 
 /**
  * The engine as its own handlers see it: `play()` also carries event detail,
  * and reaches the internal sounds `SfxName` has no member for.
  */
-interface EngineInternals extends AudioEngine {
+interface EngineInternals extends Required<GameAudioEngine> {
   play(sfx: AnySfxName, params?: SfxParams): void;
 }
 
@@ -122,7 +187,7 @@ function documentHidden(): boolean {
   return typeof document !== 'undefined' && document.hidden === true;
 }
 
-export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
+export function createAudioEngine(opts: AudioEngineOptions = {}): Required<GameAudioEngine> {
   let bus: AudioBus | null = null;
   let sfxPlayer: SfxPlayer | null = null;
   let music: MusicController | null = null;
@@ -138,6 +203,7 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
   };
   let scene: SceneKey = opts.scene ?? 'bedroom';
   let tension = 0;
+  let contextFill = 0;
 
   /** Last fire time per SFX, in ms on the context clock. */
   const lastFired = new Map<AnySfxName, number>();
@@ -172,12 +238,31 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
       autoGates.set('autoCrit', now);
       // No tick on top of the sting.
       autoGates.set('autoClick', now);
-      api.play('clickCrit');
+      api.play('clickCrit', AUTO_TICK);
       return;
     }
     if (!autoGateOpen('autoClick', now, AUTO_CLICK_GAP_MS)) return;
     autoGates.set('autoClick', now);
     api.play('click', AUTO_TICK);
+  }
+
+  /** A short room on the sfx bus, for the bells and fanfares that ask for it. */
+  function buildSpace(created: AudioBus): AudioNode | null {
+    const ctx = created.ctx;
+    if (typeof ctx.createConvolver !== 'function') return null;
+    try {
+      const ir = reverbImpulse(ctx, { seconds: 1.1, damp: 0.5, preDelay: 0.008, seed: 0x5f5 });
+      if (!ir) return null;
+      const conv = ctx.createConvolver();
+      conv.buffer = ir;
+      const ret = ctx.createGain();
+      setParam(ret.gain, SFX_SPACE_RETURN);
+      conv.connect(ret);
+      ret.connect(created.sfx);
+      return conv;
+    } catch {
+      return null;
+    }
   }
 
   async function boot(): Promise<void> {
@@ -192,14 +277,15 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
 
     bus = created;
     pool = new VoicePool(SFX_VOICE_CAP);
-    sfxPlayer = createSfxPlayer({ ctx: created.ctx, out: created.sfx, pool });
-    music = createMusic(created.ctx, created.music);
+    sfxPlayer = createSfxPlayer({ ctx: created.ctx, out: created.sfx, pool, space: buildSpace(created) });
+    music = createMusic(created.ctx, created.music, opts.timers ? { timers: opts.timers } : {});
 
     // Apply state captured before unlock, instantly (nothing is audible yet).
     created.setMusicVolume(volumes.music, 0);
     created.setSfxVolume(volumes.sfx, 0);
     music.setScene(scene);
     music.setTension(tension);
+    music.setContextFill(contextFill);
     music.setEnabled(volumes.music > 0);
 
     await created.resume();
@@ -252,6 +338,8 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
         lastFired.set(name, now);
       }
       sfxPlayer.play(name, undefined, params);
+      const duck = MUSIC_DUCK[name];
+      if (duck) music?.duck(duck[0], duck[1]);
     },
 
     handle(e: GameEvent): void {
@@ -318,19 +406,19 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
 
         // -- incidents and pickups ------------------------------------------
         case 'incidentStart':
-          api.play(incidentSfx(e.id, e.tone));
+          api.play(incidentSfx(e.id, e.tone), { speaker: incidentSpeaker(e.id) });
           return;
         case 'incidentEnd':
           api.play('incidentClear');
           return;
         case 'pickupCollect':
-          api.play('incidentGood');
+          api.play('incidentGood', { speaker: HUMAN_PICKUPS.has(e.id) ? 'human' : 'world' });
           return;
 
         // -- milestones -----------------------------------------------------
         // The game-1 save turning up is an occasion too. It tends to arrive
         // with its own hidden achievement; the coalescer folds a same-moment
-        // pair into one fanfare.
+        // pair into one jingle.
         case 'achievement':
         case 'legacyImport':
           api.play('achievement');
@@ -339,10 +427,12 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
           api.play(e.won ? 'win' : 'lose');
           return;
         case 'runStart':
-          // Fresh run: drop the click streak and relax the score.
+          // Fresh run: drop the click walk and relax the score.
           sfxPlayer?.resetStreak();
           tension = 0;
+          contextFill = 0;
           music?.setTension(0);
+          music?.setContextFill(0);
           return;
 
         // Informational: the stage and the UI show these; the ear does not need them.
@@ -366,6 +456,24 @@ export function createAudioEngine(opts: AudioEngineOptions = {}): AudioEngine {
       if (destroyed) return;
       tension = clamp01(t);
       music?.setTension(tension);
+    },
+
+    setContextFill(f: number): void {
+      if (destroyed) return;
+      contextFill = saturate(f);
+      music?.setContextFill(contextFill);
+    },
+
+    inspect(): EngineState {
+      return {
+        unlocked: unlockedFlag,
+        scene,
+        tension,
+        contextFill,
+        volumes: { music: volumes.music, sfx: volumes.sfx },
+        sfxVoices: pool?.active ?? 0,
+        music: music ? music.inspect() : null,
+      };
     },
 
     setVolumes(v: { music: number; sfx: number }): void {

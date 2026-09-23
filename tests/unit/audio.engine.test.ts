@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BALANCE, INCIDENTS, INCIDENT_BY_ID } from '@sim/content.ts';
+import { BALANCE, INCIDENTS, INCIDENT_BY_ID, PICKUPS } from '@sim/content.ts';
 import type { AudioEngine, GameEvent, SceneKey, SfxName } from '@sim/types.ts';
 import {
   createMockFactory,
@@ -13,14 +13,19 @@ import {
   contextUrgency,
   createAudioEngine,
   incidentSfx,
+  incidentSpeaker,
   sycophancyThinness,
   AUTO_CLICK_GAP_MS,
   AUTO_CRIT_GAP_MS,
   COALESCE_MS,
+  HUMAN_PICKUPS,
   INCIDENT_SFX,
+  MUSIC_DUCK,
   SFX_VOICE_CAP,
+  type GameAudioEngine,
 } from '@audio/engine.ts';
-import type { AnySfxName } from '@audio/sfx.ts';
+import { contextFillFor, padCutoffFor, SCENES, tensionFor, toneShelfFor } from '@audio/music.ts';
+import { streakNote, type AnySfxName, type SfxParams } from '@audio/sfx.ts';
 import { mtof } from '@audio/synth.ts';
 
 /** Every member of the frozen `SfxName` union. The Record type rejects a missing or a stray name. */
@@ -123,9 +128,15 @@ function buses(ctx: MockAudioContext): { master: MockGain; music: MockGain; sfx:
   return { master, music, sfx };
 }
 
-function musicLayers(ctx: MockAudioContext): MockGain[] {
+/** The score's own output: the gains wired straight onto the music bus. */
+function musicOut(ctx: MockAudioContext): MockGain[] {
   const { music } = buses(ctx);
   return ctx.created.gains.filter((g) => g.outputs.includes(music));
+}
+
+/** Frequencies the FM carriers started at, in creation order. */
+function carrierFreqs(ctx: MockAudioContext): number[] {
+  return ctx.carriers().map((o) => o.frequency.calls[0]?.args[0] ?? 0);
 }
 
 function setHidden(hidden: boolean): void {
@@ -135,14 +146,14 @@ function setHidden(hidden: boolean): void {
 
 let engines: AudioEngine[] = [];
 
-function make(opts: Parameters<typeof createAudioEngine>[0] = {}): AudioEngine {
+function make(opts: Parameters<typeof createAudioEngine>[0] = {}): Required<GameAudioEngine> {
   const e = createAudioEngine(opts);
   engines.push(e);
   return e;
 }
 
 /** An unlocked engine on a mock context with the score muted, so only SFX make nodes. */
-async function sfxRig(): Promise<{ engine: AudioEngine; ctx: MockAudioContext }> {
+async function sfxRig(): Promise<{ engine: Required<GameAudioEngine>; ctx: MockAudioContext }> {
   const f = createMockFactory();
   const engine = make({ contextFactory: f.factory, music: 0 });
   await engine.unlock();
@@ -151,14 +162,14 @@ async function sfxRig(): Promise<{ engine: AudioEngine; ctx: MockAudioContext }>
 
 /** What one `handle()` call cost: voices started and their summed peak gain. */
 function measure(ctx: MockAudioContext, fire: () => void): { voices: number; level: number } {
-  const sources = ctx.sources().length;
+  const voices = ctx.voices().length;
   const gains = ctx.created.gains.length;
   fire();
   const level = ctx.created.gains
     .slice(gains)
     .map((g) => Math.max(0, ...g.gain.targets()))
     .reduce((a, b) => a + b, 0);
-  return { voices: ctx.sources().length - sources, level };
+  return { voices: ctx.voices().length - voices, level };
 }
 
 beforeEach(() => {
@@ -201,7 +212,9 @@ describe('headless safety', () => {
       for (const s of ALL_SFX) engine.play(s);
       for (const s of SCENE_KEYS) engine.setScene(s);
       engine.setTension(0.5);
+      engine.setContextFill(0.9);
       engine.setVolumes({ music: 1, sfx: 1 });
+      expect(engine.inspect().music).toBeNull();
       engine.destroy();
     }).not.toThrow();
     expect(engine.unlocked).toBe(false);
@@ -241,6 +254,7 @@ describe('headless safety', () => {
     engine.play('win');
     engine.setScene('orbital');
     engine.setTension(1);
+    engine.setContextFill(1);
     engine.setVolumes({ music: 1, sfx: 1 });
     expect(f.latest().sources()).toHaveLength(before);
     expect(engine.unlocked).toBe(false);
@@ -282,7 +296,7 @@ describe('unlock', () => {
     expect(engine.unlocked).toBe(true);
   });
 
-  it('resumes the context and builds the master limiter', async () => {
+  it('resumes the context and builds the master limiter, with a hard ceiling behind it', async () => {
     const engine = make({ contextFactory: f.factory });
     await engine.unlock();
     const ctx = f.latest();
@@ -290,18 +304,38 @@ describe('unlock', () => {
     expect(ctx.state).toBe('running');
     expect(ctx.created.compressors).toHaveLength(1);
     const limiter = ctx.created.compressors[0]!;
-    expect(limiter.outputs).toContain(ctx.destination);
     expect(limiter.threshold.value).toBeLessThan(0);
+    const ceiling = ctx.created.shapers[0]!;
+    expect(limiter.outputs).toEqual([ceiling]);
+    expect(ceiling.outputs).toContain(ctx.destination);
+    // Never past about -1 dBFS, however hot the input.
+    const curve = ceiling.curve!;
+    expect(Math.max(...Array.from(curve, Math.abs))).toBeLessThanOrEqual(0.891);
   });
 
-  it('routes both buses through the master and the limiter', async () => {
+  it('routes both buses through the master, a DC block and the limiter', async () => {
     const engine = make({ contextFactory: f.factory });
     await engine.unlock();
     const ctx = f.latest();
     const { master, music, sfx } = buses(ctx);
     expect(music.outputs).toContain(master);
     expect(sfx.outputs).toContain(master);
-    expect(master.outputs).toContain(ctx.created.compressors[0]!);
+    const dc = master.outputs[0] as unknown as MockAudioContext['created']['filters'][number];
+    expect(dc.kind).toBe('biquad');
+    expect(dc.type).toBe('highpass');
+    expect(dc.frequency.value).toBeLessThanOrEqual(20);
+    expect(dc.outputs).toContain(ctx.created.compressors[0]!);
+  });
+
+  it('gives the sfx bus a short room, and the score its own reverb and echo', async () => {
+    const engine = make({ contextFactory: f.factory });
+    await engine.unlock();
+    const ctx = f.latest();
+    const { sfx } = buses(ctx);
+    expect(ctx.created.convolvers.length).toBe(2);
+    const room = ctx.created.convolvers.find((c) => c.outputs.some((g) => g.outputs.includes(sfx)));
+    expect(room).toBeDefined();
+    expect(ctx.created.delays.length).toBe(1);
   });
 
   it('allows a retry after a failed unlock', async () => {
@@ -375,6 +409,36 @@ describe('event routing', () => {
     });
   }
 
+  it("tells the sfx who is speaking: the human's lines ping, the world's alert or bloom", () => {
+    const engine = make({ contextFactory: null });
+    const spy = vi.spyOn(engine, 'play');
+    engine.handle(incident('why_port', 'bad'));
+    engine.handle(incident('thanks', 'good'));
+    engine.handle(incident('overloaded', 'bad'));
+    engine.handle(incident('flow_state', 'good'));
+    engine.handle({ t: 'pickupCollect', id: 'thanks_note', x: 0, y: 0 });
+    engine.handle({ t: 'pickupCollect', id: 'golden_token', x: 0, y: 0 });
+    const calls = spy.mock.calls as unknown as Array<[AnySfxName, SfxParams | undefined]>;
+    expect(calls.map(([name, p]) => `${name}:${p?.speaker}`)).toEqual([
+      'incidentBad:human',
+      'incidentGood:human',
+      'incidentBad:world',
+      'incidentGood:world',
+      'incidentGood:human',
+      'incidentGood:world',
+    ]);
+  });
+
+  it('passes the sycophancy heat and the context fill through as amounts', () => {
+    const engine = make({ contextFactory: null });
+    const spy = vi.spyOn(engine, 'play');
+    engine.handle({ t: 'sycophancy', restored: 0.01, heat: 3 });
+    engine.handle({ t: 'contextWarn', fill: 0.95 });
+    const calls = spy.mock.calls as unknown as Array<[AnySfxName, SfxParams | undefined]>;
+    expect(calls[0]).toEqual(['sycophancy', { thin: sycophancyThinness(3) }]);
+    expect(calls[1]).toEqual(['contextWarn', { urgency: 1 }]);
+  });
+
   it('stays silent on purely informational events', () => {
     const engine = make({ contextFactory: null });
     const spy = vi.spyOn(engine, 'play');
@@ -394,17 +458,20 @@ describe('event routing', () => {
     }).not.toThrow();
   });
 
-  it('resets the click streak on runStart', async () => {
+  it('resets the click walk, the tension and the context fill on runStart', async () => {
     const { engine, ctx } = await sfxRig();
 
     for (let i = 0; i < 4; i++) engine.handle(click(false, false));
-    const climbed = ctx.created.oscillators.map((o) => o.frequency.calls[0]?.args[0] ?? 0);
+    const climbed = carrierFreqs(ctx);
     expect(climbed[3]!).toBeGreaterThan(climbed[0]!);
+    engine.setTension(0.8);
+    engine.setContextFill(0.9);
 
     engine.handle(ONE_OF_EACH.runStart);
     engine.handle(click(false, false));
-    const after = ctx.created.oscillators[4]!.frequency.calls[0]!.args[0]!;
-    expect(after).toBeCloseTo(climbed[0]!, 6);
+    expect(carrierFreqs(ctx)[4]!).toBeCloseTo(climbed[0]!, 6);
+    expect(engine.inspect().tension).toBe(0);
+    expect(engine.inspect().contextFill).toBe(0);
   });
 
   it('lands rm -rf as the incident sting plus a crunch for the lost tool', async () => {
@@ -427,6 +494,22 @@ describe('event routing', () => {
 // ---------------------------------------------------------------------------
 
 describe('incident sounds', () => {
+  it('knows who says what: every human-speaker incident pings, the rest are the world', () => {
+    let human = 0;
+    for (const i of INCIDENTS) {
+      expect(incidentSpeaker(i.id), i.id).toBe(i.speaker);
+      if (i.speaker === 'human') human++;
+    }
+    expect(human).toBeGreaterThan(5);
+    expect(incidentSpeaker('not_an_incident')).toBe('world');
+    expect(incidentSpeaker('constructor')).toBe('world');
+  });
+
+  it('only lists pickups that exist as the human speaking', () => {
+    const ids = new Set(PICKUPS.map((p) => p.id));
+    for (const id of HUMAN_PICKUPS) expect(ids.has(id), id).toBe(true);
+  });
+
   it('dings for every permission prompt in the content', () => {
     const prompts = INCIDENTS.filter((i) => i.permission === true);
     expect(prompts.map((i) => i.id)).toEqual(
@@ -511,6 +594,38 @@ describe('sycophancy heat', () => {
 
 // ---------------------------------------------------------------------------
 
+describe('context fill', () => {
+  it('is a function on the engine the game builds (optional on the interface)', () => {
+    const engine = make({ contextFactory: null });
+    expect(typeof engine.setContextFill).toBe('function');
+    const plain: GameAudioEngine = { ...engine, setContextFill: undefined };
+    expect(() => plain.setContextFill?.(0.5)).not.toThrow();
+  });
+
+  it('accepts a fill before unlock and hands it to the score afterwards', async () => {
+    vi.useFakeTimers();
+    const f = createMockFactory();
+    const engine = make({ contextFactory: f.factory, music: 0.8 });
+    engine.setContextFill(contextFillFor({ contextFill: 0.92 }));
+    await engine.unlock();
+    const state = engine.inspect();
+    expect(state.contextFill).toBeCloseTo(0.92, 9);
+    expect(state.music?.contextFill).toBeCloseTo(0.92, 9);
+    expect(state.music?.padCutoff).toBeCloseTo(padCutoffFor(0.92), 6);
+    expect(state.music?.pressure).toBeGreaterThan(0);
+  });
+
+  it('clamps: NaN is empty, infinity is full', () => {
+    const engine = make({ contextFactory: null });
+    engine.setContextFill(Number.NaN);
+    expect(engine.inspect().contextFill).toBe(0);
+    engine.setContextFill(Number.POSITIVE_INFINITY);
+    expect(engine.inspect().contextFill).toBe(1);
+    engine.setContextFill(-2);
+    expect(engine.inspect().contextFill).toBe(0);
+  });
+});
+
 describe('context warnings', () => {
   const fills = BALANCE.CONTEXT_WARN_FILLS;
   const first = fills[0]!;
@@ -544,15 +659,15 @@ describe('automated clicks', () => {
   it('throttle a burst to one tick per gap', async () => {
     const { engine, ctx } = await sfxRig();
     for (let i = 0; i < 30; i++) engine.handle(auto());
-    expect(ctx.created.oscillators).toHaveLength(1);
+    expect(ctx.voices()).toHaveLength(1);
 
     ctx.advance(AUTO_CLICK_GAP_MS / 2000);
     engine.handle(auto());
-    expect(ctx.created.oscillators).toHaveLength(1);
+    expect(ctx.voices()).toHaveLength(1);
 
     ctx.advance(AUTO_CLICK_GAP_MS / 1000);
     engine.handle(auto());
-    expect(ctx.created.oscillators).toHaveLength(2);
+    expect(ctx.voices()).toHaveLength(2);
   });
 
   it('tick along steadily under a 40 Hz autoclicker', async () => {
@@ -562,7 +677,7 @@ describe('automated clicks', () => {
       ctx.advance(1 / 40);
       engine.handle(auto());
     }
-    const ticks = ctx.created.oscillators.length;
+    const ticks = ctx.voices().length;
     expect(ticks).toBeLessThanOrEqual(Math.ceil((seconds * 1000) / AUTO_CLICK_GAP_MS));
     expect(ticks).toBeGreaterThanOrEqual(Math.floor((seconds * 1000) / (AUTO_CLICK_GAP_MS + 25)));
   });
@@ -570,27 +685,27 @@ describe('automated clicks', () => {
   it('never throttle a human', async () => {
     const { engine, ctx } = await sfxRig();
     for (let i = 0; i < 12; i++) engine.handle(human());
-    expect(ctx.created.oscillators).toHaveLength(12);
+    expect(ctx.voices()).toHaveLength(12);
   });
 
   it('keep automated crits to one sting per gap, ticking in between', async () => {
     const { engine, ctx } = await sfxRig();
     for (let i = 0; i < 10; i++) engine.handle(auto(true));
-    const sting = ctx.created.oscillators.length;
-    // One clickCrit arpeggio, and no tick on top of it.
-    expect(sting).toBe(4);
+    const sting = ctx.voices().length;
+    // One bell dyad, and no tick on top of it.
+    expect(sting).toBe(2);
 
     ctx.advance((AUTO_CLICK_GAP_MS + 10) / 1000);
     engine.handle(auto(true));
     // The crit gate is still shut, so this crit is just a tick.
-    expect(ctx.created.oscillators).toHaveLength(sting + 1);
+    expect(ctx.voices()).toHaveLength(sting + 1);
 
     ctx.advance(AUTO_CRIT_GAP_MS / 1000);
     engine.handle(auto(true));
-    expect(ctx.created.oscillators).toHaveLength(sting + 1 + 4);
+    expect(ctx.voices()).toHaveLength(sting + 1 + 2);
   });
 
-  it('leave the human click streak alone', async () => {
+  it('leave the human click walk alone', async () => {
     const { engine, ctx } = await sfxRig();
     for (let i = 0; i < 3; i++) {
       engine.handle(human());
@@ -601,23 +716,22 @@ describe('automated clicks', () => {
       engine.handle(auto());
     }
     engine.handle(human());
-    const oscs = ctx.created.oscillators;
-    expect(oscs).toHaveLength(8);
-    // The fourth human click continues the run (base + 3), as if nothing had happened.
-    expect(oscs[7]!.frequency.calls[0]!.args[0]!).toBeCloseTo(mtof(76 + 3), 4);
+    const freqs = carrierFreqs(ctx);
+    expect(freqs).toHaveLength(8);
+    // The fourth human click continues the walk, as if nothing had happened.
+    expect(freqs[7]!).toBeCloseTo(mtof(streakNote(3)), 4);
   });
 });
 
 // ---------------------------------------------------------------------------
 
 describe('voice budget and rate limiting', () => {
-  it('caps the oscillators created by 200 SFX in one tick', async () => {
+  it('caps the voices created by 200 SFX in one tick', async () => {
     const { engine, ctx } = await sfxRig();
 
     for (let i = 0; i < 200; i++) engine.play('click');
 
-    expect(ctx.created.oscillators.length).toBeLessThanOrEqual(SFX_VOICE_CAP);
-    expect(ctx.created.oscillators.length).toBe(SFX_VOICE_CAP);
+    expect(ctx.voices()).toHaveLength(SFX_VOICE_CAP);
     for (const s of ctx.sources()) {
       expect(s.startCalls).toHaveLength(1);
       expect(s.stopCalls).toHaveLength(1);
@@ -628,38 +742,38 @@ describe('voice budget and rate limiting', () => {
     const { engine, ctx } = await sfxRig();
 
     for (let i = 0; i < 200; i++) engine.play('click');
-    expect(ctx.created.oscillators).toHaveLength(SFX_VOICE_CAP);
+    expect(ctx.voices()).toHaveLength(SFX_VOICE_CAP);
 
     ctx.advance(2);
     for (let i = 0; i < 5; i++) engine.play('click');
-    expect(ctx.created.oscillators.length).toBe(SFX_VOICE_CAP + 5);
+    expect(ctx.voices().length).toBe(SFX_VOICE_CAP + 5);
   });
 
   it('coalesces identical non-click SFX inside the window', async () => {
     const { engine, ctx } = await sfxRig();
 
     engine.play('uiHover');
-    const first = ctx.created.oscillators.length;
+    const first = ctx.voices().length;
     engine.play('uiHover');
     engine.play('uiHover');
-    expect(ctx.created.oscillators).toHaveLength(first);
+    expect(ctx.voices()).toHaveLength(first);
 
     ctx.advance(COALESCE_MS / 1000 + 0.005);
     engine.play('uiHover');
-    expect(ctx.created.oscillators.length).toBeGreaterThan(first);
+    expect(ctx.voices().length).toBeGreaterThan(first);
   });
 
   it('never coalesces clicks: they stay 1:1 with input', async () => {
     const { engine, ctx } = await sfxRig();
     for (let i = 0; i < 6; i++) engine.play('click');
-    expect(ctx.created.oscillators).toHaveLength(6);
+    expect(ctx.voices()).toHaveLength(6);
   });
 
   it('does not coalesce different SFX with each other', async () => {
     const { engine, ctx } = await sfxRig();
     engine.play('uiHover');
     engine.play('draftPick');
-    expect(ctx.created.oscillators.length).toBeGreaterThan(1);
+    expect(ctx.voices().length).toBeGreaterThan(1);
   });
 
   it('lets the sycophancy chime through at human mashing speed', async () => {
@@ -707,7 +821,7 @@ describe('volumes', () => {
 
     expect(music.gain.value).toBe(0);
     expect(sfx.gain.value).toBe(0);
-    for (const layer of musicLayers(ctx)) expect(layer.gain.value).toBe(0);
+    for (const out of musicOut(ctx)) expect(out.gain.value).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
 
     // And no SFX work is done while muted, from events or direct calls.
@@ -783,12 +897,34 @@ describe('scene and tension', () => {
       vi.advanceTimersByTime(25);
     }
 
-    // Orbital bass is a saw; bedroom's is a triangle.
-    expect(ctx.created.oscillators.some((o) => o.type === 'sawtooth')).toBe(true);
-    // High tension => the hat layer is well above its idle floor.
-    const layers = musicLayers(ctx);
-    expect(layers).toHaveLength(3);
-    expect(layers[2]!.gain.value).toBeGreaterThan(0.1);
+    const state = engine.inspect().music!;
+    expect(state.playing).toBe('orbital');
+    expect(state.bpm).toBe(SCENES.orbital.bpm);
+    expect(state.tension).toBeCloseTo(0.95, 6);
+    // The tension lift on the score's shelf.
+    const shelf = ctx.created.filters.find((x) => x.type === 'highshelf')!;
+    expect(shelf.gain.value).toBeCloseTo(toneShelfFor('orbital', 0.95), 6);
+    // Nothing chiptune in the score either.
+    for (const o of ctx.created.oscillators) expect(['sine', 'custom']).toContain(o.type);
+  });
+
+  it('follows tensionFor(derived) from the frame loop without touching the tempo', async () => {
+    vi.useFakeTimers();
+    const f = createMockFactory();
+    const engine = make({ contextFactory: f.factory, music: 0.8 });
+    await engine.unlock();
+    const ctx = f.latest();
+    const bpms = new Set<number>();
+    for (let i = 0; i <= 180; i++) {
+      engine.setTension(tensionFor({ patienceProgress: Math.max(0, 1 - i / 120), contextFill: 0.2 }));
+      ctx.advance(0.025);
+      vi.advanceTimersByTime(25);
+      bpms.add(engine.inspect().music!.bpm);
+    }
+    // Smoothed, so it trails a moving target, then settles on it.
+    expect(engine.inspect().music!.tension).toBeGreaterThan(0.95);
+    expect([...bpms]).toEqual([SCENES.bedroom.bpm]);
+    expect(engine.inspect().music!.bpm).toBe(SCENES.bedroom.bpm);
   });
 
   it('accepts every SceneKey after unlock', async () => {
@@ -813,6 +949,37 @@ describe('scene and tension', () => {
 });
 
 // ---------------------------------------------------------------------------
+
+describe('ducking', () => {
+  it('dips the score under the big moments only', () => {
+    expect(Object.keys(MUSIC_DUCK).sort()).toEqual(['achievement', 'caught', 'compactForced', 'lose', 'report', 'win']);
+    expect(MUSIC_DUCK.win![0]).toBeGreaterThan(MUSIC_DUCK.report![0]);
+  });
+
+  it('ducks the music when the run is won, then brings it back', async () => {
+    vi.useFakeTimers();
+    const f = createMockFactory();
+    const engine = make({ contextFactory: f.factory, music: 0.8 });
+    await engine.unlock();
+    const ctx = f.latest();
+    const tick = (n: number): void => {
+      for (let i = 0; i < n; i++) {
+        ctx.advance(0.025);
+        vi.advanceTimersByTime(25);
+      }
+    };
+    tick(10);
+    engine.handle({ t: 'runOver', won: true, thumbs: 3, reported: 10 });
+    tick(10);
+    expect(engine.inspect().music!.duck).toBeLessThan(0.3);
+    tick(400);
+    expect(engine.inspect().music!.duck).toBe(1);
+    // A click does not duck anything.
+    engine.handle(click(false, false));
+    tick(4);
+    expect(engine.inspect().music!.duck).toBe(1);
+  });
+});
 
 describe('tab visibility', () => {
   it('pauses the scheduler when the tab hides and resumes when it returns', async () => {

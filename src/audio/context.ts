@@ -10,8 +10,14 @@
  * Signal flow:
  *
  *   music ─┐
- *          ├─> master ─> limiter ─> destination
+ *          ├─> master ─> dc block ─> limiter ─> ceiling ─> destination
  *   sfx   ─┘
+ *
+ * The DC block is a 15 Hz high-pass, so nothing sub-sonic reaches the
+ * limiter's detector. The limiter is a gentle compressor; the ceiling is a
+ * WaveShaper that is exactly linear below about -3 dBFS and can never pass
+ * about -1 dBFS, which catches anything the compressor lets through during
+ * its attack.
  */
 
 /** Factory that mints a fresh `AudioContext`. Injectable for tests. */
@@ -21,8 +27,12 @@ export interface AudioBus {
   readonly ctx: AudioContext;
   /** Post-mix trim, pre-limiter. */
   readonly master: GainNode;
+  /** Sub-sonic high-pass ahead of the limiter. `null` if the platform lacks biquads. */
+  readonly dcBlock: BiquadFilterNode | null;
   /** Gentle master limiter. `null` if the platform lacks compressors. */
   readonly limiter: DynamicsCompressorNode | null;
+  /** Hard safety ceiling after the limiter. `null` if the platform lacks WaveShapers. */
+  readonly ceiling: WaveShaperNode | null;
   /** Music layers connect here. */
   readonly music: GainNode;
   /** One-shot SFX connect here. */
@@ -37,8 +47,11 @@ export interface AudioBus {
 
 /** Master trim, leaves headroom under the limiter. */
 const MASTER_TRIM = 0.9;
+/** The ceiling's hard limit (about -1 dBFS) and where its shoulder starts (about -3 dBFS). */
+const CEILING = 0.89;
+const CEILING_KNEE = 0.7;
 /** Music sits well under SFX so it never masks feedback. */
-const MUSIC_HEADROOM = 0.42;
+const MUSIC_HEADROOM = 0.6;
 const SFX_HEADROOM = 0.85;
 /** Default gain ramp — long enough to kill zipper noise, short enough to feel instant. */
 export const DEFAULT_RAMP_S = 0.08;
@@ -46,6 +59,28 @@ export const DEFAULT_RAMP_S = 0.08;
 export function clamp01(v: number): number {
   if (!Number.isFinite(v)) return 0;
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+const CURVE_POINTS = 4096;
+
+/**
+ * The master ceiling's transfer curve: exactly linear up to `knee`, then a
+ * tanh shoulder that never passes `ceiling` (0.89 is about -1 dBFS). A
+ * WaveShaper clamps anything beyond +-1 to the curve's ends, so the output can
+ * never exceed the curve's last point.
+ */
+export function ceilingCurve(ceiling = CEILING, knee = CEILING_KNEE): Float32Array<ArrayBuffer> {
+  const c = Math.min(1, Math.max(0.1, Number.isFinite(ceiling) ? ceiling : CEILING));
+  const k = Math.min(c * 0.98, Math.max(0.05, Number.isFinite(knee) ? knee : CEILING_KNEE));
+  const span = c - k;
+  const curve = new Float32Array(CURVE_POINTS);
+  for (let i = 0; i < CURVE_POINTS; i++) {
+    const x = (i / (CURVE_POINTS - 1)) * 2 - 1;
+    const ax = Math.abs(x);
+    const y = ax <= k ? ax : k + span * Math.tanh((ax - k) / span);
+    curve[i] = Math.sign(x) * y;
+  }
+  return curve;
 }
 
 /** Perceptual-ish volume curve. Exactly 0 at 0, exactly 1 at 1. */
@@ -127,6 +162,14 @@ export function createAudioBus(factory: AudioContextFactory): AudioBus | null {
     const master = context.createGain();
     setParam(master.gain, MASTER_TRIM);
 
+    let dcBlock: BiquadFilterNode | null = null;
+    if (typeof context.createBiquadFilter === 'function') {
+      dcBlock = context.createBiquadFilter();
+      dcBlock.type = 'highpass';
+      setParam(dcBlock.frequency, 15);
+      setParam(dcBlock.Q, 0.5);
+    }
+
     let limiter: DynamicsCompressorNode | null = null;
     if (typeof context.createDynamicsCompressor === 'function') {
       limiter = context.createDynamicsCompressor();
@@ -139,6 +182,13 @@ export function createAudioBus(factory: AudioContextFactory): AudioBus | null {
       setParam(limiter.release, 0.2);
     }
 
+    let ceiling: WaveShaperNode | null = null;
+    if (typeof context.createWaveShaper === 'function') {
+      ceiling = context.createWaveShaper();
+      ceiling.curve = ceilingCurve(CEILING, CEILING_KNEE);
+      ceiling.oversample = 'none';
+    }
+
     const music = context.createGain();
     const sfx = context.createGain();
     setParam(music.gain, 0);
@@ -146,17 +196,28 @@ export function createAudioBus(factory: AudioContextFactory): AudioBus | null {
 
     music.connect(master);
     sfx.connect(master);
-    if (limiter) {
-      master.connect(limiter);
-      limiter.connect(context.destination);
-    } else {
-      master.connect(context.destination);
+    // master -> [dc block] -> [limiter] -> [ceiling] -> destination
+    let tail: AudioNode = master;
+    if (dcBlock) {
+      tail.connect(dcBlock);
+      tail = dcBlock;
     }
+    if (limiter) {
+      tail.connect(limiter);
+      tail = limiter;
+    }
+    if (ceiling) {
+      tail.connect(ceiling);
+      tail = ceiling;
+    }
+    tail.connect(context.destination);
 
     const bus: AudioBus = {
       ctx: context,
       master,
+      dcBlock,
       limiter,
+      ceiling,
       music,
       sfx,
       now() {
@@ -182,7 +243,9 @@ export function createAudioBus(factory: AudioContextFactory): AudioBus | null {
           music.disconnect();
           sfx.disconnect();
           master.disconnect();
+          dcBlock?.disconnect();
           limiter?.disconnect();
+          ceiling?.disconnect();
         } catch {
           /* ignore */
         }

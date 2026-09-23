@@ -7,11 +7,17 @@ import {
   type MockOscillator,
   type MockScheduledSource,
 } from '@audio/mock-context.ts';
+import { SFX_VOICE_CAP } from '@audio/engine.ts';
+import { THEME } from '@audio/music.ts';
 import {
+  CLICK_SCALE,
   createSfxPlayer,
+  critDyad,
   SFX_PRIORITY,
+  SFX_TRIM,
   STREAK_IDLE_S,
   STREAK_MAX_STEPS,
+  streakNote,
   type AnySfxName,
   type ExtraSfxName,
   type SfxParams,
@@ -54,8 +60,8 @@ const EXTRA_SET: Record<ExtraSfxName, true> = {
 };
 const ALL_SFX = [...Object.keys(SFX_SET), ...Object.keys(EXTRA_SET)] as AnySfxName[];
 
-/** The run-end stings may take their time; everything else is short. */
-const LONG_SFX: ReadonlySet<AnySfxName> = new Set<AnySfxName>(['win', 'lose']);
+/** The run-end stings, the jingle and the forced compaction's tail may take their time; everything else is short. */
+const LONG_SFX: ReadonlySet<AnySfxName> = new Set<AnySfxName>(['win', 'lose', 'achievement', 'report', 'compactForced']);
 const SHORT_S = 1.2;
 
 interface Rig {
@@ -96,14 +102,25 @@ function startAt(s: MockScheduledSource): number {
   return s.startCalls[0] ?? 0;
 }
 
+function semitones(a: number, b: number): number {
+  return 12 * Math.log2(b / a);
+}
+
 /** When the last voice stops. */
 function tail(r: Rig): number {
   return Math.max(...r.mock.sources().map((s) => s.stopCalls[0] ?? 0));
 }
 
-/** Peak gain of every voice, in creation order (the rig's own output bus excluded). */
+/** The voices' amps: gains wired to the output bus (directly or through a panner). */
+function amps(r: Rig): MockGain[] {
+  return r.mock.created.gains.filter(
+    (g) => g !== r.out && g.outputs.some((o) => o === r.out || (o.kind === 'panner' && o.outputs.includes(r.out))),
+  );
+}
+
+/** Peak gain of every voice amp, in creation order. */
 function peaks(r: Rig): number[] {
-  return r.mock.created.gains.filter((g) => g !== r.out).map((g) => Math.max(0, ...g.gain.targets()));
+  return amps(r).map((g) => Math.max(0, ...g.gain.targets()));
 }
 
 /** A crude loudness proxy: the voices' peak gains, summed. */
@@ -111,11 +128,12 @@ function loudness(r: Rig): number {
   return peaks(r).reduce((a, b) => a + b, 0);
 }
 
-/** A cheap fingerprint of a sound: which sources fired, at what pitch, when. */
+/** A cheap fingerprint of a sound: which voices fired, at what pitch, when. */
 function fingerprint(mock: MockAudioContext): string {
   const parts: string[] = [];
+  for (const osc of mock.carriers()) parts.push(`fm:${startFreq(osc).toFixed(1)}@${startAt(osc).toFixed(3)}`);
   for (const osc of mock.created.oscillators) {
-    parts.push(`osc:${osc.type}:${startFreq(osc).toFixed(1)}@${startAt(osc).toFixed(3)}`);
+    if (osc.frequency.inputs.length === 0 && osc.type !== 'custom') parts.push(`osc:${osc.type}:${startFreq(osc).toFixed(1)}@${startAt(osc).toFixed(3)}`);
   }
   for (const bs of mock.created.bufferSources) {
     const rate = bs.playbackRate.calls[0]?.args[0] ?? 0;
@@ -125,21 +143,38 @@ function fingerprint(mock: MockAudioContext): string {
 }
 
 describe('SFX coverage', () => {
-  it('covers every member of the SfxName union, plus the internal sounds', () => {
+  it('covers every member of the SfxName union, plus the internal sounds, in every table', () => {
     expect(Object.keys(SFX_SET)).toHaveLength(26);
     expect(ALL_SFX).toHaveLength(27);
     expect(Object.keys(SFX_PRIORITY).sort()).toEqual([...ALL_SFX].sort());
+    expect(Object.keys(SFX_TRIM).sort()).toEqual([...ALL_SFX].sort());
   });
 
-  it('produces at least one scheduled source for every sound', () => {
+  it('produces voices for every sound, each started and stopped exactly once', () => {
     for (const name of ALL_SFX) {
       const { mock } = render(name);
-      const sources = mock.sources();
-      expect(sources.length, `${name} produced no voices`).toBeGreaterThan(0);
-      for (const s of sources) {
+      expect(mock.voices().length, `${name} produced no voices`).toBeGreaterThan(0);
+      for (const s of mock.sources()) {
         expect(s.startCalls.length, `${name} source never started`).toBe(1);
         expect(s.stopCalls.length, `${name} source never stopped`).toBe(1);
       }
+    }
+  });
+
+  it('builds every sound on FM, and never on a chiptune pulse, square or saw', () => {
+    for (const name of ALL_SFX) {
+      const { mock } = render(name);
+      expect(mock.carriers().length, `${name} has no FM voice`).toBeGreaterThan(0);
+      for (const o of mock.created.oscillators) {
+        expect(['sine', 'custom', 'triangle'], `${name} uses ${o.type}`).toContain(o.type);
+      }
+      expect(mock.created.periodicWaves.length, `${name}`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('fits every sound inside the engine voice cap', () => {
+    for (const name of ALL_SFX) {
+      expect(render(name).mock.voices().length, name).toBeLessThanOrEqual(SFX_VOICE_CAP);
     }
   });
 
@@ -154,7 +189,7 @@ describe('SFX coverage', () => {
     expect(seen.size).toBe(ALL_SFX.length);
   });
 
-  it('keeps every sound short, apart from the run-end stings', () => {
+  it('keeps every sound short, apart from the moments', () => {
     for (const name of ALL_SFX) {
       const limit = LONG_SFX.has(name) ? 2.5 : SHORT_S;
       expect(tail(render(name)), name).toBeLessThan(limit);
@@ -179,199 +214,359 @@ describe('SFX coverage', () => {
       ['uiHover', undefined],
     ];
     for (const [name, params] of cases) {
-      expect(render(name, params).mock.sources(), name).toHaveLength(1);
+      expect(render(name, params).mock.voices(), name).toHaveLength(1);
     }
   });
 
-  it('uses noise for the sounds that need grit', () => {
-    const gritty = [
+  it('puts the loudness tiers in order: hover < click < UI < the big moments', () => {
+    const loud = (name: AnySfxName): number => Math.max(...peaks(render(name)));
+    expect(loud('uiHover')).toBeLessThan(loud('click'));
+    for (const ui of ['buy', 'draftPick', 'permission', 'denied'] as const) {
+      expect(loud(ui), ui).toBeGreaterThan(loud('click'));
+    }
+    const moments = ['report', 'caught', 'compactForced', 'win', 'lose'] as const;
+    for (const m of moments) expect(loudness(render(m)), m).toBeGreaterThan(loudness(render('buy')));
+  });
+
+  it('uses noise for the sounds that need texture', () => {
+    const textured = [
+      'buy',
       'report',
-      'claim',
-      'caught',
       'compact',
       'compactForced',
       'interrupt',
       'toolLost',
       'win',
       'lose',
-      'incidentBad',
       'draftOpen',
       'reroll',
+      'metaBuy',
+      'oneShot',
     ] as const;
-    for (const name of gritty) {
+    for (const name of textured) {
       expect(render(name).mock.created.bufferSources.length, `${name} has no noise layer`).toBeGreaterThan(0);
     }
   });
 
-  it('makes clickCrit brighter than click', () => {
-    const click = render('click');
-    const crit = render('clickCrit');
-    const clickTop = Math.max(...click.mock.created.oscillators.map(startFreq));
-    const critLow = Math.min(...crit.mock.created.oscillators.map(startFreq));
-    expect(critLow).toBeGreaterThan(clickTop);
-  });
-
-  it('makes win longer and larger than report', () => {
-    const report = render('report');
-    const win = render('win');
-    expect(win.mock.sources().length).toBeGreaterThan(report.mock.sources().length);
-    expect(tail(win)).toBeGreaterThan(tail(report));
-  });
-
-  it('slides lose downward', () => {
-    const { mock } = render('lose');
-    const osc = mock.created.oscillators[0]!;
-    expect(endFreq(osc)).toBeLessThan(startFreq(osc) / 2);
-  });
-
-  it('varies warn pitch between consecutive beeps so it does not grate', () => {
-    const { mock, player } = setup();
-    const bases: number[] = [];
-    for (let i = 0; i < 4; i++) {
-      mock.advance(1);
-      const before = mock.created.oscillators.length;
-      player.play('warn');
-      bases.push(startFreq(mock.created.oscillators[before]!));
+  it('crushes only where digital grit is the point', () => {
+    const gritty = new Set<AnySfxName>(['caught', 'compactForced', 'toolLost']);
+    for (const name of ALL_SFX) {
+      const crushed = render(name).mock.created.shapers.length > 0;
+      expect(crushed, name).toBe(gritty.has(name));
     }
-    expect(new Set(bases).size).toBe(4);
-    // ...but the wobble stays sub-semitone, so it still reads as the same alarm.
-    for (const f of bases) {
-      expect(Math.abs(1200 * Math.log2(f / bases[0]!))).toBeLessThan(100);
+  });
+});
+
+describe('the click walk', () => {
+  function clickFreqs(mock: MockAudioContext): number[] {
+    return mock.carriers().map(startFreq);
+  }
+
+  it('walks up D minor pentatonic, one scale step per rapid click', () => {
+    const { mock, player } = setup();
+    for (let i = 0; i < CLICK_SCALE.length; i++) player.play('click');
+    const freqs = clickFreqs(mock);
+    expect(freqs.map((f) => Math.round(69 + 12 * Math.log2(f / 440)))).toEqual([...CLICK_SCALE]);
+    for (const midi of CLICK_SCALE) expect([0, 3, 5, 7, 10]).toContain((midi - 62 + 120) % 12);
+  });
+
+  it('falls back to the bottom after a pause', () => {
+    const { mock, player } = setup();
+    for (let i = 0; i < 5; i++) player.play('click');
+    mock.advance(STREAK_IDLE_S + 0.05);
+    player.play('click');
+    const freqs = clickFreqs(mock);
+    expect(freqs[5]!).toBeCloseTo(mtof(CLICK_SCALE[0]), 4);
+    expect(player.streak).toBe(0);
+  });
+
+  it('keeps walking while the clicks stay inside the idle window', () => {
+    const { mock, player } = setup();
+    player.play('click');
+    mock.advance(STREAK_IDLE_S - 0.05);
+    player.play('click');
+    const freqs = clickFreqs(mock);
+    expect(freqs[1]!).toBeGreaterThan(freqs[0]!);
+  });
+
+  it('wanders over the top notes on a long mash, never above D6 and never stuck on one pitch', () => {
+    const { mock, player } = setup(512);
+    for (let i = 0; i < 200; i++) player.play('click');
+    const notes = clickFreqs(mock).map((f) => Math.round(69 + 12 * Math.log2(f / 440)));
+    const top = CLICK_SCALE[STREAK_MAX_STEPS];
+    expect(Math.max(...notes)).toBe(top);
+    const cruise = notes.slice(STREAK_MAX_STEPS + 1);
+    expect(new Set(cruise).size).toBeGreaterThanOrEqual(3);
+    for (let i = 2; i < cruise.length; i++) {
+      expect(cruise[i] === cruise[i - 1] && cruise[i] === cruise[i - 2]).toBe(false);
+    }
+  });
+
+  it('streakNote is the walk, as a pure function', () => {
+    for (let i = 0; i <= STREAK_MAX_STEPS; i++) expect(streakNote(i)).toBe(CLICK_SCALE[i]);
+    expect(streakNote(-3)).toBe(CLICK_SCALE[0]);
+    expect(streakNote(Number.NaN)).toBe(CLICK_SCALE[0]);
+    for (let i = 0; i < 100; i++) expect(CLICK_SCALE).toContain(streakNote(i) as (typeof CLICK_SCALE)[number]);
+  });
+
+  it('varies every click a little, so the thousandth is not a copy of the first', () => {
+    const { mock, player } = setup(512);
+    for (let i = 0; i < 40; i++) {
+      mock.advance(1); // every click the first of its run: same pitch each time
+      player.play('click');
+    }
+    const cars = mock.carriers();
+    expect(new Set(cars.map(startFreq)).size).toBe(1);
+    const detunes = new Set(cars.map((o) => o.detune.value.toFixed(3)));
+    expect(detunes.size).toBeGreaterThan(30);
+    for (const o of cars) expect(Math.abs(o.detune.value)).toBeLessThanOrEqual(6);
+    const levels = peaks({ mock, out: mock.created.gains[0]!, player, pool: new VoicePool(1) });
+    expect(new Set(levels.map((l) => l.toFixed(4))).size).toBeGreaterThan(30);
+  });
+
+  it('is short and soft: a blip, not a beep', () => {
+    const r = render('click');
+    expect(tail(r)).toBeLessThan(0.15);
+    expect(Math.max(...peaks(r))).toBeLessThan(0.12);
+    // Lowpassed well under the harsh range.
+    expect(r.mock.created.filters[0]!.frequency.value).toBeLessThanOrEqual(4000);
+  });
+
+  it('forgets the walk on resetStreak()', () => {
+    const { mock, player } = setup();
+    for (let i = 0; i < 4; i++) player.play('click');
+    player.resetStreak();
+    player.play('click');
+    expect(clickFreqs(mock)[4]!).toBeCloseTo(mtof(CLICK_SCALE[0]), 4);
+  });
+
+  it('plays automated clicks as a fainter tick, lower than the walk', () => {
+    const human = render('click');
+    const auto = render('click', { auto: true });
+    expect(Math.max(...peaks(auto))).toBeLessThan(Math.max(...peaks(human)));
+    expect(startFreq(auto.mock.carriers()[0]!)).toBeLessThan(mtof(CLICK_SCALE[0]));
+  });
+
+  it('neither climbs nor resets the walk on automated clicks', () => {
+    const { mock, player } = setup();
+    for (let i = 0; i < 3; i++) player.play('click');
+    expect(player.streak).toBe(2);
+    for (let i = 0; i < 10; i++) {
+      mock.advance(0.05);
+      player.play('click', undefined, { auto: true });
+    }
+    expect(player.streak).toBe(2);
+    player.play('click');
+    expect(player.streak).toBe(3);
+    const cars = mock.carriers();
+    expect(startFreq(cars[cars.length - 1]!)).toBeCloseTo(mtof(CLICK_SCALE[3]), 4);
+  });
+});
+
+describe('crits and one-shots', () => {
+  it('rings a bright glass dyad a fourth apart, above the click it lands on', () => {
+    for (let pos = 0; pos < 20; pos++) {
+      const [lo, hi] = critDyad(pos);
+      expect(hi - lo).toBe(5);
+      expect(lo).toBeGreaterThan(streakNote(pos));
+    }
+    // ...and it climbs with the run.
+    expect(critDyad(STREAK_MAX_STEPS)[0]).toBeGreaterThan(critDyad(0)[0]);
+  });
+
+  it('clickCrit: the click blip plus the bell pair, on inharmonic glass', () => {
+    const { mock } = render('clickCrit');
+    const cars = mock.carriers();
+    expect(cars).toHaveLength(3);
+    const bells = cars.filter((o) => startFreq(o) > mtof(80));
+    expect(bells).toHaveLength(2);
+    for (const b of bells) {
+      const mod = mock.modulators().find((m) => (m.outputs[0] as MockGain).paramOutputs.includes(b.frequency))!;
+      const ratio = startFreq(mod) / startFreq(b);
+      expect(Number.isInteger(Math.round(ratio * 1000) / 1000)).toBe(false);
+    }
+  });
+
+  it('a human crit steps the walk; an automated one does not, and skips the blip', () => {
+    const { mock, player } = setup();
+    player.play('click');
+    player.play('clickCrit');
+    expect(player.streak).toBe(1);
+    player.play('clickCrit', undefined, { auto: true });
+    expect(player.streak).toBe(1);
+    const autoCrit = render('clickCrit', { auto: true });
+    expect(autoCrit.mock.carriers()).toHaveLength(2);
+    expect(mock.carriers().length).toBe(1 + 3 + 2);
+  });
+
+  it('oneShot: a quick spray that only ever climbs', () => {
+    const { mock } = render('oneShot');
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    expect(cars.length).toBeGreaterThanOrEqual(4);
+    for (let i = 1; i < cars.length; i++) {
+      expect(startFreq(cars[i]!)).toBeGreaterThan(startFreq(cars[i - 1]!));
+      expect(startAt(cars[i]!) - startAt(cars[i - 1]!)).toBeLessThan(0.06);
     }
   });
 });
 
 describe('the report button', () => {
-  it('report: commits with a low thunk, then rings out on a high chime', () => {
+  it('report: a key press, an e-piano climb that resolves on D, and an airy whoosh', () => {
     const { mock } = render('report');
-    const oscs = mock.created.oscillators;
-    const atOnce = oscs.filter((o) => startAt(o) === 0);
-    expect(Math.min(...atOnce.map(startFreq))).toBeLessThan(mtof(48));
-    const last = Math.max(...oscs.map(startAt));
-    const chime = oscs.filter((o) => startAt(o) === last);
-    expect(chime.length).toBeGreaterThanOrEqual(2);
-    for (const o of chime) expect(startFreq(o)).toBeGreaterThanOrEqual(mtof(84) - 0.01);
-  });
-
-  it('claim: whooshes band-passed noise across the stereo field, then winks', () => {
-    const { mock } = render('claim');
-    expect(mock.created.bufferSources.length).toBeGreaterThanOrEqual(2);
-    const bands = mock.created.filters.filter((f) => f.type === 'bandpass');
-    expect(bands.length).toBeGreaterThanOrEqual(2);
-    // Each band sweeps: the air moves.
-    for (const f of bands) expect(f.frequency.calls.length).toBeGreaterThan(1);
-    const pans = mock.created.panners.map((p) => p.pan.value);
-    expect(Math.min(...pans)).toBeLessThan(0);
-    expect(Math.max(...pans)).toBeGreaterThan(0);
-    // The wink comes last, up high.
-    const wink = mock.created.oscillators.reduce((a, b) => (startAt(b) > startAt(a) ? b : a));
-    expect(startFreq(wink)).toBeGreaterThan(mtof(80));
-  });
-
-  it('caught: buzzes low, then says "wrong" in a falling line', () => {
-    const { mock } = render('caught');
-    const oscs = [...mock.created.oscillators].sort((a, b) => startAt(a) - startAt(b));
-    const buzzer = oscs.filter((o) => startAt(o) === 0);
-    expect(buzzer.length).toBeGreaterThanOrEqual(2);
-    for (const o of buzzer) expect(startFreq(o)).toBeLessThan(130);
-    const wrong = oscs.filter((o) => startAt(o) > 0);
-    expect(wrong.length).toBeGreaterThanOrEqual(2);
-    for (let i = 1; i < wrong.length; i++) {
-      expect(startFreq(wrong[i]!)).toBeLessThan(startFreq(wrong[i - 1]!));
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    // The press: a low thunk at once.
+    expect(cars.some((o) => startAt(o) === 0 && startFreq(o) < mtof(55))).toBe(true);
+    // The climb: four e-piano notes, rising.
+    const climb = cars.filter((o) => startAt(o) > 0 && startAt(o) < 0.25);
+    expect(climb).toHaveLength(4);
+    for (let i = 1; i < climb.length; i++) expect(startFreq(climb[i]!)).toBeGreaterThan(startFreq(climb[i - 1]!));
+    // The resolution: a chord after the climb, every note a D, an A or an E (Dadd9).
+    const chord = cars.filter((o) => startAt(o) >= 0.28);
+    expect(chord.length).toBeGreaterThanOrEqual(3);
+    for (const o of chord) {
+      const pc = Math.round(69 + 12 * Math.log2(startFreq(o) / 440)) % 12;
+      expect([2, 9, 4]).toContain(pc);
     }
-    const sag = wrong[wrong.length - 1]!;
-    expect(endFreq(sag)).toBeLessThan(startFreq(sag));
+    // The whoosh: band-passed noise sweeping up.
+    const air = mock.created.filters.find((f) => f.type === 'bandpass' && (f.frequency.calls[1]?.args[0] ?? 0) > 5000);
+    expect(air).toBeDefined();
+  });
+
+  it('claim: a sly minor-second slide', () => {
+    const { mock } = render('claim');
+    const cars = mock.carriers();
+    expect(cars.length).toBeGreaterThanOrEqual(1);
+    for (const o of cars) {
+      const moves = o.frequency.calls.map((c) => c.args[0]!);
+      expect(semitones(moves[0]!, moves[moves.length - 1]!)).toBeCloseTo(1, 6);
+      // It holds, then slides: more than a single ramp.
+      expect(moves.length).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('caught: a bonk, then a buzzy descending tritone, crushed', () => {
+    const { mock } = render('caught');
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b) || startFreq(b) - startFreq(a));
+    const bonk = cars.find((o) => startFreq(o) < 200);
+    expect(bonk).toBeDefined();
+    expect(endFreq(bonk!)).toBeLessThan(startFreq(bonk!));
+    const error = cars.filter((o) => startFreq(o) >= 200);
+    expect(error).toHaveLength(2);
+    expect(startAt(error[1]!)).toBeGreaterThan(startAt(error[0]!));
+    expect(semitones(startFreq(error[0]!), startFreq(error[1]!))).toBeCloseTo(-6, 6);
+    // Buzzy: a hot index.
+    const depth = (o: MockOscillator): number => o.frequency.inputs.length;
+    for (const o of error) expect(depth(o)).toBe(1);
+    expect(mock.created.shapers.length).toBeGreaterThanOrEqual(2);
+    expect(tail({ mock } as Rig)).toBeLessThan(0.6);
   });
 });
 
 describe('context', () => {
-  it('compact: a hydraulic squish that sinks, then a crumple of paper', () => {
+  it('compact: a zip of teeth running down, into a thump, then crumpled paper', () => {
     const { mock } = render('compact');
-    // The press: a body gliding down more than an octave.
-    const press = mock.created.oscillators.find((o) => endFreq(o) < startFreq(o) / 2);
-    expect(press).toBeDefined();
-    // Hydraulic hiss under the press...
-    expect(mock.created.bufferSources.some((b) => startAt(b) === startAt(press!))).toBe(true);
-    // ...then a scatter of short paper grains once it has closed.
-    const grains = mock.created.bufferSources.filter((b) => startAt(b) > startAt(press!) + 0.2);
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    const thump = cars.find((o) => startFreq(o) < 150)!;
+    expect(thump).toBeDefined();
+    expect(endFreq(thump)).toBeLessThan(startFreq(thump) / 2);
+    const teeth = cars.filter((o) => startAt(o) < startAt(thump) && startFreq(o) >= 150);
+    expect(teeth.length).toBeGreaterThanOrEqual(8);
+    for (let i = 1; i < teeth.length; i++) {
+      expect(startFreq(teeth[i]!)).toBeLessThan(startFreq(teeth[i - 1]!));
+      // Faster as it goes.
+      if (i > 1) {
+        expect(startAt(teeth[i]!) - startAt(teeth[i - 1]!)).toBeLessThan(startAt(teeth[i - 1]!) - startAt(teeth[i - 2]!) + 1e-9);
+      }
+    }
+    expect(semitones(startFreq(teeth[0]!), startFreq(teeth[teeth.length - 1]!))).toBeLessThan(-18);
+    // A glissando in the score's key: every tooth on D minor pentatonic.
+    for (const o of teeth) {
+      const pc = (Math.round(69 + 12 * Math.log2(startFreq(o) / 440)) - 62 + 120) % 12;
+      expect([0, 3, 5, 7, 10]).toContain(pc);
+    }
+    const grains = mock.created.bufferSources.filter((b) => startAt(b) > startAt(thump));
     expect(grains.length).toBeGreaterThanOrEqual(5);
     expect(new Set(grains.map(startAt)).size).toBe(grains.length);
   });
 
-  it('compactForced: the same squish, harsher and louder', () => {
+  it('compactForced: the same zip, bigger, with a hydraulic slam first and a longer, harsher tail', () => {
     const manual = render('compact');
     const forced = render('compactForced');
-    expect(forced.mock.sources().length).toBeGreaterThan(manual.mock.sources().length);
-    expect(loudness(forced)).toBeGreaterThan(loudness(manual) * 1.3);
-    // Harsher: a saw where the manual press is all triangle.
-    const waves = (r: Rig): Set<string> => new Set(r.mock.created.oscillators.map((o) => o.type));
-    expect([...waves(manual)]).toEqual(['triangle']);
-    expect(waves(forced).has('sawtooth')).toBe(true);
-    // The same gesture: it crumples paper too, and more of it.
-    const crumple = (r: Rig): number =>
-      r.mock.created.filters.filter((f) => f.type === 'highpass').length;
-    expect(crumple(forced)).toBeGreaterThan(crumple(manual));
-    // And it hits first: something starts at once, before the press.
-    expect(forced.mock.sources().filter((s) => startAt(s) === 0).length).toBeGreaterThanOrEqual(2);
+    expect(forced.mock.voices().length).toBeGreaterThan(manual.mock.voices().length);
+    expect(loudness(forced)).toBeGreaterThan(loudness(manual));
+    expect(tail(forced)).toBeGreaterThan(tail(manual) + 0.3);
+    // The slam: a low hit and a burst of noise at once, before any tooth.
+    const atOnce = forced.mock.sources().filter((s) => startAt(s) === 0);
+    expect(atOnce.length).toBeGreaterThanOrEqual(2);
+    // Harsher: the thump and the slam are crushed; the manual one is clean.
+    expect(forced.mock.created.shapers.length).toBeGreaterThanOrEqual(2);
+    expect(manual.mock.created.shapers).toHaveLength(0);
   });
 
-  it('contextWarn: blips that rise, more of them and higher when the window is nearly gone', () => {
+  it('contextWarn: detuned pulses that climb, more of them and higher when the window is nearly gone', () => {
     const first = render('contextWarn', { urgency: 0 });
     const last = render('contextWarn', { urgency: 1 });
     for (const r of [first, last]) {
-      expect(r.mock.created.oscillators.length).toBeGreaterThanOrEqual(2);
-      for (const o of r.mock.created.oscillators) expect(endFreq(o)).toBeGreaterThan(startFreq(o));
+      const cars = r.mock.carriers();
+      expect(cars.length).toBeGreaterThanOrEqual(6);
+      for (const o of cars) expect(endFreq(o)).toBeGreaterThan(startFreq(o));
+      // Pairs: the same note, detuned against itself.
+      const byNote = new Map<string, number[]>();
+      for (const o of cars) {
+        const key = `${startFreq(o).toFixed(2)}@${startAt(o).toFixed(3)}`;
+        byNote.set(key, [...(byNote.get(key) ?? []), o.detune.value]);
+      }
+      for (const detunes of byNote.values()) expect(new Set(detunes).size).toBe(2);
     }
-    expect(last.mock.sources().length).toBeGreaterThan(first.mock.sources().length);
-    expect(startFreq(last.mock.created.oscillators[0]!)).toBeGreaterThan(
-      startFreq(first.mock.created.oscillators[0]!),
-    );
+    expect(last.mock.voices().length).toBeGreaterThan(first.mock.voices().length);
+    expect(Math.min(...last.mock.carriers().map(startFreq))).toBeGreaterThan(Math.min(...first.mock.carriers().map(startFreq)));
   });
 
-  it('toolLost: a short destructive crunch, a dropping thud, a collapsing body, then rubble', () => {
+  it('warn: fingers drumming, unevenly, holding their pitch (the context alarm rises; this never does)', () => {
+    const { mock } = render('warn');
+    const taps = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    expect(taps.length).toBeGreaterThanOrEqual(8);
+    for (const o of mock.created.oscillators) expect(o.frequency.calls).toHaveLength(1);
+    const gaps = taps.slice(1).map((o, i) => +(startAt(o) - startAt(taps[i]!)).toFixed(4));
+    expect(new Set(gaps).size).toBeGreaterThan(4);
+    // Woody knocks, low: nothing beeps.
+    for (const o of taps) expect(startFreq(o)).toBeLessThan(300);
+  });
+
+  it('warn: two warnings in a run are two different takes', () => {
+    const { mock, player } = setup();
+    player.play('warn');
+    const first = fingerprint(mock);
+    mock.advance(2);
+    const before = mock.carriers().length;
+    player.play('warn');
+    const second = mock.carriers().slice(before).map((o) => `${startFreq(o).toFixed(1)}@${(startAt(o) - 2).toFixed(3)}`);
+    expect(second.join('|')).not.toBe(first);
+  });
+
+  it('toolLost: a crushed crunch in which everything falls, then rubble; shorter than a compaction', () => {
     const r = render('toolLost');
     const { mock } = r;
     expect(tail(r)).toBeLessThan(0.5);
-    const oscs = mock.created.oscillators;
-    // Everything tonal falls: something was taken away, not added.
-    expect(oscs.length).toBeGreaterThanOrEqual(2);
-    for (const o of oscs) expect(endFreq(o)).toBeLessThan(startFreq(o));
-    // A low thud at once.
-    expect(oscs.some((o) => startAt(o) === 0 && startFreq(o) < 100)).toBe(true);
-    // A noise body at once, darkening as it crumbles.
-    const body = mock.created.bufferSources.filter((b) => startAt(b) === 0);
-    expect(body).toHaveLength(1);
-    const lows = mock.created.filters.filter((f) => f.type === 'lowpass' && f.frequency.calls.length > 1);
-    expect(lows.some((f) => (f.frequency.calls[1]?.args[0] ?? 0) < (f.frequency.calls[0]?.args[0] ?? 0))).toBe(true);
-    // Rubble afterwards.
+    expect(tail(r)).toBeLessThan(tail(render('compact')));
+    const cars = mock.carriers();
+    expect(cars.length).toBeGreaterThanOrEqual(3);
+    for (const o of cars) expect(endFreq(o)).toBeLessThan(startFreq(o));
+    expect(cars.some((o) => startAt(o) === 0 && startFreq(o) < 100)).toBe(true);
+    expect(mock.created.shapers.length).toBeGreaterThan(0);
+    expect(mock.created.bufferSources.filter((b) => startAt(b) === 0)).toHaveLength(1);
     expect(mock.created.bufferSources.filter((b) => startAt(b) > 0.1).length).toBeGreaterThanOrEqual(3);
-  });
-
-  it('toolLost is not a compaction: no triangle press, and over sooner', () => {
-    const lost = render('toolLost');
-    const squish = render('compact');
-    expect(lost.mock.created.oscillators.some((o) => o.type === 'triangle')).toBe(false);
-    expect(tail(lost)).toBeLessThan(tail(squish));
-  });
-
-  it('warn (patience) holds its pitch, so it never reads as the rising context alarm', () => {
-    const { mock } = render('warn');
-    for (const o of mock.created.oscillators) expect(o.frequency.calls).toHaveLength(1);
   });
 });
 
-describe('the human', () => {
-  it('sycophancy: bright when sincere, thinner with every notch of spam', () => {
+describe('the human, and the world', () => {
+  it('sycophancy: sparkly when sincere, thinner, quieter and more strained with every notch of spam', () => {
     const levels = [0, 0.25, 0.5, 0.75, 1];
     const rigs = levels.map((thin) => render('sycophancy', { thin }));
-    const voices = rigs.map((r) => r.mock.sources().length);
+    const voices = rigs.map((r) => r.mock.voices().length);
     const loud = rigs.map(loudness);
-    // The highpass on the ding itself: the body is filtered away as it thins.
-    const air = rigs.map((r) =>
-      Math.min(...r.mock.created.filters.filter((f) => f.type === 'highpass').map((f) => f.frequency.value)),
-    );
-    // The first note: eager, then squeaky.
-    const pitch = rigs.map((r) => startFreq(r.mock.created.oscillators[0]!));
+    const air = rigs.map((r) => Math.min(...r.mock.created.filters.filter((f) => f.type === 'highpass').map((f) => f.frequency.value)));
+    const pitch = rigs.map((r) => startFreq(r.mock.carriers()[0]!));
     for (let i = 1; i < levels.length; i++) {
       expect(voices[i]!, `voices at ${levels[i]}`).toBeLessThanOrEqual(voices[i - 1]!);
       expect(loud[i]!, `loudness at ${levels[i]}`).toBeLessThan(loud[i - 1]!);
@@ -379,23 +574,58 @@ describe('the human', () => {
       expect(pitch[i]!, `pitch at ${levels[i]}`).toBeGreaterThan(pitch[i - 1]!);
     }
     expect(voices[0]!).toBeGreaterThan(voices[voices.length - 1]!);
-    // Sincere means bright: something up at E6 or above.
-    expect(Math.max(...rigs[0]!.mock.created.oscillators.map(startFreq))).toBeGreaterThanOrEqual(mtof(88) - 0.01);
+    // Sincere means sparkly: glass up at E6 or above.
+    expect(Math.max(...rigs[0]!.mock.carriers().map(startFreq))).toBeGreaterThanOrEqual(mtof(88) - 0.01);
+    // Strained: off the tempered grid once thin.
+    const strained = 69 + 12 * Math.log2(pitch[2]! / 440);
+    expect(Math.abs(strained - Math.round(strained))).toBeGreaterThan(0.1);
   });
 
   it('sycophancy with no params is the sincere version', () => {
     expect(fingerprint(render('sycophancy').mock)).toBe(fingerprint(render('sycophancy', { thin: 0 }).mock));
   });
 
-  it('interrupt: a crack, then a spray of high, scattered, off-key shards', () => {
+  it("the human's lines arrive as a two-note chat ping that bubbles up into each note", () => {
+    for (const name of ['incidentBad', 'incidentGood'] as const) {
+      const { mock } = render(name, { speaker: 'human' });
+      const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+      expect(cars, name).toHaveLength(2);
+      expect(mock.created.bufferSources, name).toHaveLength(0);
+      for (const o of cars) expect(endFreq(o)).toBeGreaterThan(startFreq(o));
+      expect(startAt(cars[1]!) - startAt(cars[0]!)).toBeGreaterThan(0.05);
+    }
+    const bad = [...render('incidentBad', { speaker: 'human' }).mock.carriers()].map(endFreq);
+    const good = [...render('incidentGood', { speaker: 'human' }).mock.carriers()].map(endFreq);
+    expect(bad[1]!).toBeLessThan(bad[0]!);
+    expect(good[1]!).toBeGreaterThan(good[0]!);
+  });
+
+  it('a bad world incident is a low system alert; a good one is a warm, slow bloom', () => {
+    const alert = render('incidentBad');
+    expect(fingerprint(alert.mock)).toBe(fingerprint(render('incidentBad', { speaker: 'world' }).mock));
+    expect(Math.max(...alert.mock.carriers().map(startFreq))).toBeLessThan(200);
+    expect(alert.mock.created.bufferSources.length).toBeGreaterThan(0);
+
+    const bloom = render('incidentGood', { speaker: 'world' });
+    const cars = bloom.mock.carriers();
+    expect(cars.length).toBeGreaterThanOrEqual(4);
+    // Slow attack: every bloom voice takes over 0.1 s to arrive.
+    for (const g of amps(bloom).filter((a) => a.gain.calls.length > 0).slice(0, cars.length)) {
+      const attackEnd = g.gain.calls[1]!.args[1]!;
+      const start = g.gain.calls[0]!.args[1]!;
+      expect(attackEnd - start).toBeGreaterThanOrEqual(0.1);
+    }
+  });
+
+  it('interrupt: a crack, a knock, sharp crackle, and glassy inharmonic partials, off-key', () => {
     const { mock } = render('interrupt');
     expect(mock.created.bufferSources.some((b) => startAt(b) === 0)).toBe(true);
-    const shards = mock.created.oscillators.filter((o) => startFreq(o) > 2000);
-    expect(shards.length).toBeGreaterThanOrEqual(5);
-    expect(new Set(shards.map(startAt)).size).toBe(shards.length);
-    expect(new Set(shards.map((o) => startFreq(o).toFixed(1))).size).toBe(shards.length);
-    // Glass does not break in tune: at least some shards sit between semitones.
-    const offKey = shards.filter((o) => {
+    const crackle = mock.created.bufferSources.filter((b) => startAt(b) > 0);
+    expect(crackle.length).toBeGreaterThanOrEqual(5);
+    const glass = mock.carriers().filter((o) => startFreq(o) > 2000);
+    expect(glass.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(glass.map(startAt)).size).toBe(glass.length);
+    const offKey = glass.filter((o) => {
       const midi = 69 + 12 * Math.log2(startFreq(o) / 440);
       return Math.abs(midi - Math.round(midi)) > 0.1;
     });
@@ -405,114 +635,110 @@ describe('the human', () => {
     expect(Math.max(...pans)).toBeGreaterThan(0);
   });
 
-  it('permission: a polite ding, then the same ding again', () => {
+  it('permission: a polite chime, then the same chime again, softer', () => {
     const r = render('permission');
-    const oscs = r.mock.created.oscillators;
-    const level = peaks(r);
-    // Oscillators only, so voice amps line up with oscillators one to one.
     expect(r.mock.created.bufferSources).toHaveLength(0);
-    expect(level).toHaveLength(oscs.length);
-    // The ding at each onset is its loudest voice.
-    const onsets = [...new Set(oscs.map(startAt))].sort((a, b) => a - b);
-    expect(onsets.length).toBeGreaterThanOrEqual(2);
-    const dings = onsets.map((at) => {
-      let best = -1;
-      oscs.forEach((o, i) => {
-        if (startAt(o) === at && (best < 0 || (level[i] ?? 0) > (level[best] ?? 0))) best = i;
-      });
-      return { at, f: startFreq(oscs[best]!), peak: level[best] ?? 0 };
-    });
-    // The same pitch each time, well spaced, and the repeat no louder.
-    expect(new Set(dings.map((d) => d.f.toFixed(2))).size).toBe(1);
-    expect(dings[1]!.at - dings[0]!.at).toBeGreaterThan(0.3);
-    expect(dings[1]!.peak).toBeLessThanOrEqual(dings[0]!.peak);
-    // Polite: soft triangles only, and never at the level of the big thunks.
-    expect(new Set(oscs.map((o) => o.type))).toEqual(new Set(['triangle']));
-    expect(Math.max(...level)).toBeLessThanOrEqual(0.2);
+    const cars = r.mock.carriers();
+    const onsets = [...new Set(cars.map(startAt))].sort((a, b) => a - b);
+    expect(onsets).toHaveLength(2);
+    expect(onsets[1]! - onsets[0]!).toBeGreaterThan(0.3);
+    const at = (t: number): string =>
+      cars
+        .filter((o) => startAt(o) === t)
+        .map((o) => startFreq(o).toFixed(2))
+        .sort()
+        .join(',');
+    expect(at(onsets[1]!)).toBe(at(onsets[0]!));
+    const levels = peaks(r);
+    const half = levels.length / 2;
+    expect(Math.max(...levels.slice(half))).toBeLessThan(Math.max(...levels.slice(0, half)));
+    expect(Math.max(...levels)).toBeLessThanOrEqual(0.2);
+  });
+
+  it('incidentClear: a relieved fall home to D', () => {
+    const { mock } = render('incidentClear');
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b) || startFreq(b) - startFreq(a));
+    expect(startFreq(cars[1]!)).toBeLessThan(startFreq(cars[0]!));
+    const pcs = cars.slice(1).map((o) => Math.round(69 + 12 * Math.log2(startFreq(o) / 440)) % 12);
+    expect(pcs.every((pc) => pc === 2)).toBe(true);
   });
 });
 
-describe('click streak', () => {
-  function clickFreqs(mock: MockAudioContext): number[] {
-    return mock.created.oscillators.map(startFreq);
-  }
+describe('draft, training and milestones', () => {
+  it('draftOpen: a reveal shimmer: glass fanning up, with rising air', () => {
+    const { mock } = render('draftOpen');
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    expect(cars).toHaveLength(3);
+    for (let i = 1; i < cars.length; i++) expect(startFreq(cars[i]!)).toBeGreaterThan(startFreq(cars[i - 1]!));
+    const air = mock.created.filters.find((f) => f.type === 'highpass')!;
+    expect(air.frequency.calls[1]!.args[0]!).toBeGreaterThan(air.frequency.calls[0]!.args[0]!);
+  });
 
-  it('raises the pitch on each of 5 rapid clicks', () => {
-    const { mock, player } = setup();
-    for (let i = 0; i < 5; i++) player.play('click');
+  it('draftPick: a confident select, a dyad and a thump struck together', () => {
+    const { mock } = render('draftPick');
+    const cars = mock.carriers();
+    expect(cars.every((o) => startAt(o) === 0)).toBe(true);
+    expect(cars.some((o) => startFreq(o) < 150)).toBe(true);
+    expect(cars.filter((o) => startFreq(o) > 500)).toHaveLength(2);
+    expect(tail(render('draftPick'))).toBeLessThan(0.5);
+  });
 
-    const freqs = clickFreqs(mock);
-    expect(freqs).toHaveLength(5);
-    expect(new Set(freqs.map((f) => f.toFixed(4))).size).toBe(5);
-    for (let i = 1; i < freqs.length; i++) {
-      expect(freqs[i]!).toBeGreaterThan(freqs[i - 1]!);
+  it('reroll: a rattle of small FM clicks, unevenly spaced, like dice in a cup', () => {
+    const { mock } = render('reroll');
+    const clicks = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    expect(clicks.length).toBeGreaterThanOrEqual(6);
+    const gaps = clicks.slice(1).map((o, i) => +(startAt(o) - startAt(clicks[i]!)).toFixed(4));
+    expect(new Set(gaps).size).toBeGreaterThan(3);
+    expect(new Set(clicks.map((o) => startFreq(o).toFixed(0))).size).toBe(clicks.length);
+  });
+
+  it('metaBuy: weights updated, an ascending sparkle and a warm settle', () => {
+    const { mock } = render('metaBuy');
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    const sparkle = cars.filter((o) => startFreq(o) > 1000);
+    expect(sparkle.length).toBeGreaterThanOrEqual(5);
+    for (let i = 1; i < sparkle.length; i++) expect(startFreq(sparkle[i]!)).toBeGreaterThan(startFreq(sparkle[i - 1]!));
+    const settle = cars.filter((o) => startFreq(o) < 500);
+    expect(Math.min(...settle.map(startAt))).toBeGreaterThan(Math.max(...sparkle.map(startAt)));
+  });
+
+  it('achievement: its own signature, in D major, on beating ratio-4 FM', () => {
+    const { mock } = render('achievement');
+    const cars = mock.carriers();
+    // F#6 is in it: the only major third in the game's SFX.
+    expect(cars.some((o) => Math.abs(startFreq(o) - mtof(90)) < 0.01)).toBe(true);
+    // Doubled a few hertz apart: the beating of a vibraphone's motor.
+    const pairs = cars.filter((a) => cars.some((b) => b !== a && Math.abs(startFreq(b) - startFreq(a) - 5.5) < 0.01));
+    expect(pairs.length).toBeGreaterThanOrEqual(3);
+    for (const name of ALL_SFX) {
+      if (name === 'achievement') continue;
+      const has = render(name).mock.carriers().some((o) => Math.abs(startFreq(o) - mtof(90)) < 0.01);
+      expect(has, `${name} borrows the achievement's F#`).toBe(false);
     }
-    // Semitone steps up from the base note.
-    expect(freqs[0]!).toBeCloseTo(mtof(76), 4);
-    expect(freqs[4]!).toBeCloseTo(mtof(80), 4);
   });
 
-  it('resets to the base note after the idle window', () => {
-    const { mock, player } = setup();
-    for (let i = 0; i < 5; i++) player.play('click');
-    mock.advance(STREAK_IDLE_S + 0.05);
-    player.play('click');
-
-    const freqs = clickFreqs(mock);
-    expect(freqs).toHaveLength(6);
-    expect(freqs[5]!).toBeCloseTo(mtof(76), 4);
-    expect(player.streak).toBe(0);
+  it("win: the theme's opening climb on brass, landing on a big chord; bigger and longer than report", () => {
+    const { mock } = render('win');
+    const cars = [...mock.carriers()].sort((a, b) => startAt(a) - startAt(b));
+    const opening = THEME.filter(([bar, step]) => bar === 0 && step <= 6).map(([, , midi]) => midi);
+    const figure = cars.slice(0, opening.length).map((o) => Math.round(69 + 12 * Math.log2(startFreq(o) / 440)));
+    expect(figure).toEqual(opening);
+    const last = Math.max(...cars.map(startAt));
+    const chord = cars.filter((o) => startAt(o) >= last - 0.06);
+    expect(chord.length).toBeGreaterThanOrEqual(5);
+    const report = render('report');
+    const win = render('win');
+    expect(win.mock.voices().length).toBeGreaterThan(report.mock.voices().length);
+    expect(tail(win)).toBeGreaterThan(tail(report));
   });
 
-  it('does not reset while clicks stay inside the idle window', () => {
-    const { mock, player } = setup();
-    player.play('click');
-    mock.advance(STREAK_IDLE_S - 0.05);
-    player.play('click');
-    const freqs = clickFreqs(mock);
-    expect(freqs[1]!).toBeGreaterThan(freqs[0]!);
-  });
-
-  it('caps the rise at an octave no matter how long the mash runs', () => {
-    const { mock, player } = setup(512);
-    for (let i = 0; i < 60; i++) player.play('click');
-    const freqs = clickFreqs(mock);
-    const top = Math.max(...freqs);
-    expect(top).toBeCloseTo(mtof(76 + STREAK_MAX_STEPS), 4);
-    expect(freqs[59]!).toBeCloseTo(top, 4);
-    expect(player.streak).toBe(STREAK_MAX_STEPS);
-  });
-
-  it('forgets the streak on resetStreak()', () => {
-    const { mock, player } = setup();
-    for (let i = 0; i < 4; i++) player.play('click');
-    player.resetStreak();
-    player.play('click');
-    const freqs = clickFreqs(mock);
-    expect(freqs[4]!).toBeCloseTo(mtof(76), 4);
-  });
-
-  it('plays automated clicks as a softer tick under the human band', () => {
-    const human = render('click');
-    const auto = render('click', { auto: true });
-    expect(Math.max(...peaks(auto))).toBeLessThan(Math.max(...peaks(human)));
-    expect(startFreq(auto.mock.created.oscillators[0]!)).toBeLessThan(mtof(76));
-  });
-
-  it('neither climbs nor resets the streak on automated clicks', () => {
-    const { mock, player } = setup();
-    for (let i = 0; i < 3; i++) player.play('click');
-    expect(player.streak).toBe(2);
-    for (let i = 0; i < 10; i++) {
-      mock.advance(0.05);
-      player.play('click', undefined, { auto: true });
-    }
-    expect(player.streak).toBe(2);
-    // Half a second since the last human click: inside the window, so the run continues.
-    player.play('click');
-    expect(player.streak).toBe(3);
-    const oscs = mock.created.oscillators;
-    expect(startFreq(oscs[oscs.length - 1]!)).toBeCloseTo(mtof(79), 4);
+  it('lose: a power-down sweep, then the CRT clicks off', () => {
+    const { mock } = render('lose');
+    const sweep = mock.carriers()[0]!;
+    expect(semitones(startFreq(sweep), endFreq(sweep))).toBeLessThan(-24);
+    const clickOff = mock.created.bufferSources.filter((b) => startAt(b) > 1);
+    expect(clickOff.length).toBeGreaterThanOrEqual(1);
+    expect(mock.carriers().some((o) => startAt(o) > 1 && startFreq(o) < 200)).toBe(true);
   });
 });
 
@@ -529,7 +755,7 @@ describe('voice budget under load', () => {
     for (let i = 0; i < 200; i++) player.play('click');
 
     expect(pool.active).toBeLessThanOrEqual(24);
-    expect(mock.sources().length).toBeLessThanOrEqual(24);
+    expect(mock.voices().length).toBeLessThanOrEqual(24);
     for (const s of fanfare) expect(stolen(s)).toBe(false);
   });
 
@@ -537,7 +763,7 @@ describe('voice budget under load', () => {
     const { mock, player, pool } = setup(24);
     player.play('compactForced');
     const squish = mock.sources();
-    expect(squish.length).toBeGreaterThan(8);
+    expect(mock.voices().length).toBeGreaterThan(8);
 
     for (let i = 0; i < 200; i++) player.play('click');
 

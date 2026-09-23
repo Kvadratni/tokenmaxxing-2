@@ -16,7 +16,7 @@
  */
 import '../styles/palette.css';
 import '../styles/ui.css';
-import '../styles/cli.css';
+import '../styles/net-backdrop.css';
 import '../styles/help.css';
 
 import { CARD_BY_ID, INCIDENT_BY_ID, META_BY_ID, PICKUP_BY_ID, TOOL_BY_ID, UPGRADE_BY_ID } from '../sim/content.ts';
@@ -25,7 +25,6 @@ import { TID } from '../testids.ts';
 import { About } from './about.ts';
 import { createAchievementPopup } from './achievement-popup.ts';
 import { AchievementsScreen } from './achievements.ts';
-import { createCliBackdrop } from './cli-backdrop.ts';
 import { createCoach } from './coach.ts';
 import { Attr, btn, el, focusables, Hide, on, setInert, trapTab } from './dom.ts';
 import { Draft } from './draft.ts';
@@ -36,6 +35,7 @@ import { Hud, reportView } from './hud.ts';
 import { installIconSheet } from './icon.ts';
 import { LegacyNotice } from './legacy.ts';
 import { MetaScreen } from './meta.ts';
+import { createNetBackdrop } from './net-backdrop.ts';
 import { Options } from './options.ts';
 import { installPixelFont } from './pixel-font.ts';
 import { RunOver } from './runover.ts';
@@ -239,25 +239,20 @@ export function createUI(opts: UIOpts): UI {
   let firstRun = true;
   const achievementPopup = createAchievementPopup(ui, { reducedMotion: () => reduced });
 
-  // ---- the ambient CLI behind the title --------------------------------------
+  // ---- the neural net behind the title ---------------------------------------
   // Mounted inside the title screen so it cannot outlive or bleed past it.
-  const cli = createCliBackdrop({ reducedMotion: () => reduced });
-  title.el.classList.add('tm-cli-host');
-  title.el.prepend(cli.el);
-  let cliReducedAt = reduced;
+  const net = createNetBackdrop({ reducedMotion: () => reduced });
+  title.el.classList.add('tm-net-host');
+  title.el.prepend(net.el);
 
-  function syncCli(): void {
+  function syncNet(): void {
     if (destroyed) return;
     if (screen !== 'title' || document.hidden) {
-      cli.stop();
+      net.stop();
       return;
     }
-    // `start()` samples reducedMotion once; a toggle needs a restart.
-    if (cliReducedAt !== reduced) {
-      cli.stop();
-      cliReducedAt = reduced;
-    }
-    cli.start();
+    // `start()` re-reads reducedMotion every call, so a toggle is just a start.
+    net.start();
   }
 
   const dialogOpen = (): boolean =>
@@ -321,7 +316,7 @@ export function createUI(opts: UIOpts): UI {
     metaScreen.setVisible(s === 'meta');
     achievements.setVisible(s === 'achievements');
     setInert(main, s !== 'run');
-    syncCli();
+    syncNet();
     if (s === 'run') {
       refreshUnlocked();
       stage.agentBtn.focus();
@@ -339,7 +334,7 @@ export function createUI(opts: UIOpts): UI {
   metaScreen.setVisible(screen === 'meta');
   achievements.setVisible(screen === 'achievements');
   setInert(main, screen !== 'run');
-  syncCli();
+  syncNet();
 
   // ---- input -----------------------------------------------------------------
   disposers.push(
@@ -355,8 +350,8 @@ export function createUI(opts: UIOpts): UI {
     on(title.aboutBtn, 'click', () => about.toggle()),
     on(title.achievementsBtn, 'click', () => setScreen('achievements')),
     on(helpBtn, 'click', () => help.toggle()),
-    // A backgrounded tab must not keep repainting the log.
-    on(document, 'visibilitychange', () => syncCli()),
+    // A backgrounded tab must not keep repainting the net.
+    on(document, 'visibilitychange', () => syncNet()),
   );
 
   const running = (): boolean => lastRun.phase === 'running';
@@ -412,7 +407,7 @@ export function createUI(opts: UIOpts): UI {
     firstRun = meta.runs === 0;
     if (s.reducedMotion !== reduced) {
       reduced = s.reducedMotion;
-      syncCli();
+      syncNet();
     }
     options.update(s);
 
@@ -531,7 +526,7 @@ export function createUI(opts: UIOpts): UI {
     for (const d of disposers) d();
     disposers.length = 0;
     scaleCtl.destroy();
-    cli.destroy();
+    net.destroy();
     coach.destroy();
     help.destroy();
     legacy.destroy();

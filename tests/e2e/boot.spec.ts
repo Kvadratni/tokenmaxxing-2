@@ -181,7 +181,8 @@ test.describe('boot', () => {
 
   test('every static testid is rendered, and the per-item ones cover their content', async ({ page }) => {
     await bootPage(page);
-    const staticIds = Object.values(TID).filter((id) => !DYNAMIC.has(id));
+    // TID.cliBackdrop is retired (game 1's CLI backdrop): kept, never rendered.
+    const staticIds = Object.values(TID).filter((id) => !DYNAMIC.has(id) && id !== TID.cliBackdrop);
     const missing = await page.evaluate(
       (ids) => ids.filter((id) => document.querySelector(`[data-testid="${id}"]`) === null),
       staticIds,
@@ -206,11 +207,12 @@ test.describe('boot', () => {
     await expect(page.getByTestId(tid(TID.toolRow, 'read'))).toBeDisabled();
   });
 
-  test('the ambient CLI behind the title never eats the New session click', async ({ page }) => {
+  test('the neural net behind the title never eats the New session click', async ({ page }) => {
     const w = await bootPage(page);
-    const cli = page.getByTestId(TID.cliBackdrop);
-    await expect(cli).toBeAttached();
-    await expect(cli).toHaveAttribute('aria-hidden', 'true');
+    const net = page.getByTestId(TID.netBackdrop);
+    await expect(net).toBeAttached();
+    await expect(net).toHaveAttribute('aria-hidden', 'true');
+    await expect(net).toHaveCSS('pointer-events', 'none');
 
     const start = page.getByTestId(TID.startRun);
     const box = (await start.boundingBox())!;
@@ -222,7 +224,7 @@ test.describe('boot', () => {
     );
     expect(hit, 'the backdrop is intercepting the New session button').toBe(TID.startRun);
     await start.click();
-    await expect(page.getByTestId(TID.cliBackdrop)).toBeHidden();
+    await expect(page.getByTestId(TID.netBackdrop)).toBeHidden();
     expect((await snap(page)).screen).toBe('run');
     expectClean(w);
   });
