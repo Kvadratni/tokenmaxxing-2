@@ -385,7 +385,7 @@ describe('hidden', () => {
     expect(earned(s)).toEqual(['qa_engineer']);
   });
 
-  it('agent_went_to_lunch: five minutes of running time with no input; automation is not input', () => {
+  it('agent_went_to_lunch: AFK_MS of running time with no input; automation is not input', () => {
     const s = mkSim();
     s.run.cards.push('stop_being_lazy'); // auto clicks all the way through
     for (let t = 0; t < T.AFK_MS - 1000; t += 250) {
@@ -393,10 +393,23 @@ describe('hidden', () => {
       s.debug.setPatience(1);
       s.run.context = 0;
     }
-    expect(s.run.clicks).toBeGreaterThan(500);
+    expect(s.run.clicks).toBeGreaterThan((T.AFK_MS / 1000) * 3); // automation kept clicking
     expect(earned(s)).not.toContain('agent_went_to_lunch');
     for (let t = 0; t < 2000; t += 250) s.tick(250);
     expect(earned(s)).toContain('agent_went_to_lunch');
+  });
+
+  it('agent_went_to_lunch is reachable for real: patience outlasts the AFK clock', () => {
+    // The test above refills patience every tick, which is how a five-minute
+    // AFK timer inside a two-minute patience bar went unnoticed. Here nothing
+    // is refilled: a player with one Training node of patience just walks away.
+    for (const helpful of [1, 4]) {
+      const meta = defaultMeta();
+      meta.levels['helpful'] = helpful;
+      const s = mkSim({ meta });
+      for (let t = 0; t < T.AFK_MS + 5_000 && s.run.phase === 'running'; t += 250) s.tick(250);
+      expect(earned(s), `Helpful ${helpful}`).toContain('agent_went_to_lunch');
+    }
   });
 
   it('agent_went_to_lunch: any player action resets the timer', () => {
@@ -405,7 +418,7 @@ describe('hidden', () => {
       s.tick(250);
       s.debug.setPatience(1);
       s.run.context = 0;
-      if (t % 120_000 === 0) s.click(160, 112);
+      if (t % (T.AFK_MS / 2) === 0) s.click(160, 112); // act well inside every window
     }
     expect(earned(s)).not.toContain('agent_went_to_lunch');
   });

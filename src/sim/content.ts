@@ -2427,7 +2427,12 @@ export const ACHIEVEMENT_TUNING = {
   GROUNDHOG_COMPACTIONS: 5,
   SYCOPHANT_PRESSES: 10,
   SYCOPHANT_WINDOW_MS: 10_000,
-  AFK_MS: 300_000,
+  /**
+   * Must fit inside one prompt's patience, because the AFK clock only runs
+   * while patience drains. At 5 minutes it did not: even a maxed save gets
+   * about 225 s, so the achievement was unreachable.
+   */
+  AFK_MS: 120_000,
 } as const;
 
 const T = ACHIEVEMENT_TUNING;
@@ -2607,7 +2612,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   {
     id: 'agent_went_to_lunch',
     name: 'The Agent Went To Lunch',
-    blurb: 'Leave a run alone for five minutes. The human did not notice.',
+    blurb: `Leave a run alone for ${Math.round(T.AFK_MS / 60_000)} minutes. The human did not notice.`,
     hidden: true,
     icon: 'achv_agent_went_to_lunch',
   },
